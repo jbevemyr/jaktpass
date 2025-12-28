@@ -1,0 +1,182 @@
+:root {
+  --bg: #0b0d10;
+  --fg: #e6e8ee;
+  --muted: #a7adbb;
+  --card: #141821;
+  --line: #2a3242;
+  --accent: #7aa2ff;
+  --danger: #ff6b6b;
+}
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.app { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.top { display:flex; align-items:center; justify-content:space-between; gap: 16px; padding: 8px 0 16px; }
+.brand { font-weight: 700; letter-spacing: 0.4px; }
+.tabs { display:flex; gap: 8px; }
+.tab {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tab.active { border-color: var(--accent); }
+
+h2 { margin: 0 0 12px; }
+h3 { margin: 0 0 10px; }
+.view { display: none; }
+.view.active { display: block; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0;
+}
+.row { display:flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+label { display:flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+input, select, textarea {
+  background: #0f131b;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 200px;
+}
+textarea { width: 100%; min-width: unset; }
+button {
+  background: var(--accent);
+  color: #0b0d10;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg);
+}
+button.danger { background: var(--danger); color: #0b0d10; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.pre {
+  background: #0f131b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
+  max-height: 260px;
+}
+.split { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+.list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 260px; overflow: auto; }
+.list li {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+.list li:hover { border-color: var(--accent); }
+.pill {
+  background: #0f131b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 10px;
+  color: var(--fg);
+}
+
+.map {
+  position: relative;
+  width: 100%;
+  min-height: 320px;
+  background: #0f131b;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.map img {
+  width: 100%;
+  height: auto;
+  display:block;
+}
+.dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  border: 2px solid #000000;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* Admin: behåll "gula" prickar */
+.dot.admin {
+  background: #ffcf5c;
+  border: 2px solid rgba(0,0,0,0.35);
+}
+
+/* Quiz: baseline vita prickar med svart kant (default .dot) */
+.dot.quiz.correct1 { background: #43e6a8; } /* 1:a försök: grön */
+.dot.quiz.correct2 { background: #ffd24d; } /* 2:a försök: gul */
+.dot.quiz.correct3 { background: #ff9b3d; } /* 3:e försök: orange */
+.dot.quiz.reveal   { background: #ff4d4d; } /* efter 3 fel: röd */
+.dot.quiz.revealBlink {
+  background: #ff4d4d;
+  animation: blinkRed 0.6s ease-in-out infinite;
+}
+
+@keyframes blinkRed {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.map-label {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 6px));
+  pointer-events: none;
+  background: rgba(0,0,0,0.75);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.map-label.temp {
+  animation: fadeOut 1s ease forwards;
+}
+
+@keyframes fadeOut {
+  0% { opacity: 0; transform: translate(-50%, calc(-100% - 6px)) scale(0.98); }
+  10% { opacity: 1; transform: translate(-50%, calc(-100% - 6px)) scale(1); }
+  65% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+

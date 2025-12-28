@@ -1,0 +1,15 @@
+# Runtime data (persistens)
+data/
+
+# Erlang build artifacts / crash dumps
+*.beam
+erl_crash.dump
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+
+

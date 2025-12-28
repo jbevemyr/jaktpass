@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>jaktpass (Admin)</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">jaktpass (MVP)</div>
+        <nav class="tabs">
+          <button id="tab-admin" class="tab">Admin</button>
+          <button id="tab-quiz" class="tab">Quiz</button>
+        </nav>
+      </header>
+
+      <main>
+        <section id="view-admin" class="view">
+          <h2>Admin</h2>
+
+          <div class="card">
+            <h3>Basic Auth</h3>
+            <div class="row">
+              <label>Username <input id="admin-user" type="text" autocomplete="username" /></label>
+              <label>Password <input id="admin-pass" type="password" autocomplete="current-password" /></label>
+              <button id="save-creds">Spara</button>
+            </div>
+            <div class="hint">Sparas i localStorage. Skickas som <code>Authorization: Basic ...</code> på /api/admin/*</div>
+          </div>
+
+          <div class="card">
+            <h3>Set</h3>
+            <div class="row">
+              <label>Namn <input id="new-set-name" type="text" placeholder="t.ex. Södra jaktmarken" /></label>
+              <button id="create-set">Skapa set</button>
+            </div>
+            <div class="row">
+              <label>Välj set
+                <select id="admin-set-select"></select>
+              </label>
+              <button id="refresh-admin">Uppdatera</button>
+            </div>
+            <pre id="admin-set-meta" class="pre"></pre>
+          </div>
+
+          <div class="card">
+            <h3>Ladda upp kartbild</h3>
+            <div class="row">
+              <input id="image-file" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" />
+              <button id="upload-image">Ladda upp</button>
+            </div>
+          </div>
+
+          <div class="split">
+            <div class="card">
+              <h3>Pass (stands)</h3>
+              <div class="hint">Klicka i bilden för att fylla x/y (normaliserat). Skapa sedan stand.</div>
+              <div class="row">
+                <label>Namn <input id="stand-name" type="text" /></label>
+                <label>X <input id="stand-x" type="number" step="0.0001" min="0" max="1" /></label>
+                <label>Y <input id="stand-y" type="number" step="0.0001" min="0" max="1" /></label>
+                <button id="create-stand">Skapa</button>
+              </div>
+              <div class="row">
+                <label>Note <input id="stand-note" type="text" /></label>
+              </div>
+              <div class="row">
+                <label>Vald standId <input id="selected-stand-id" type="text" readonly /></label>
+                <button id="delete-stand">Radera vald</button>
+              </div>
+              <div class="hint">För att flytta: välj stand i listan → klicka ny position i bilden → klicka “Uppdatera vald”.</div>
+              <div class="row">
+                <button id="patch-stand">Uppdatera vald</button>
+              </div>
+              <ul id="stands-list" class="list"></ul>
+            </div>
+
+            <div class="card">
+              <h3>Områden (areas)</h3>
+              <div class="hint">MVP: klicka i bilden för att lägga polygonpunkter. Klicka “Spara område”.</div>
+              <div class="row">
+                <label>Namn <input id="area-name" type="text" /></label>
+                <button id="save-area">Spara område</button>
+                <button id="clear-area">Rensa punkter</button>
+              </div>
+              <div class="row">
+                <label>Valt areaId <input id="selected-area-id" type="text" readonly /></label>
+                <button id="delete-area">Radera valt</button>
+              </div>
+              <div class="hint">Redigera polygon som JSON ([{x,y}...]) om du vill:</div>
+              <textarea id="area-polygon" rows="6" class="textarea"></textarea>
+              <ul id="areas-list" class="list"></ul>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Karta</h3>
+            <div id="admin-map" class="map"></div>
+          </div>
+        </section>
+
+        <section id="view-quiz" class="view">
+          <h2>Quiz</h2>
+          <div class="card">
+            <div class="row">
+              <label>Set
+                <select id="quiz-set-select"></select>
+              </label>
+              <label>Område (valfritt)
+                <select id="quiz-area-select"></select>
+              </label>
+              <label>Antal frågor
+                <input id="quiz-count" type="number" min="1" max="200" value="10" />
+              </label>
+              <button id="start-quiz">Starta</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="pill">Fråga: <span id="quiz-question">-</span></div>
+              <div class="pill">Progress: <span id="quiz-progress">0/0</span></div>
+              <div class="pill">Score: <span id="quiz-score">100%</span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Karta</h3>
+            <div id="quiz-map" class="map"></div>
+          </div>
+
+          <pre id="quiz-debug" class="pre"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+
+
