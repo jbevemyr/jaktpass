@@ -86,8 +86,6 @@ let state = {
   adminMeta: null,
   standDraftXY: null,
   selectedStandId: null,
-  areaDraft: [],
-  selectedAreaId: null,
   quiz: {
     pack: null,
     idx: 0,
@@ -108,11 +106,34 @@ function fmt(x) {
   return JSON.stringify(x, null, 2);
 }
 
+function getOrCreateToast() {
+  let t = document.querySelector("#toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "toast";
+    t.className = "toast";
+    document.body.appendChild(t);
+  }
+  return t;
+}
+
+let toastTimer = null;
+function showToast(msg, ms = 3500) {
+  const t = getOrCreateToast();
+  t.textContent = msg;
+  t.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    try { t.classList.remove("show"); } catch {}
+  }, ms);
+}
+
 function updateScore() {
   const total = (state.quiz.pack?.questions || []).length || 0;
   const mistakes = state.quiz.mistakesTotal || 0;
   const pct = total > 0 ? Math.round((100 * total) / (total + mistakes)) : 100;
   $("#quiz-score").textContent = `${pct}%`;
+  return pct;
 }
 
 function clamp01(v) {
@@ -234,24 +255,6 @@ function renderStandsList(meta) {
   });
 }
 
-function renderAreasList(meta) {
-  const ul = $("#areas-list");
-  ul.innerHTML = "";
-  (meta.areas || []).forEach((a) => {
-    const li = el("li", {}, [
-      el("div", { text: `${a.name}  (${a.id})` }),
-      el("div", { text: `${(a.polygon || []).length} punkter` }),
-    ]);
-    li.addEventListener("click", () => {
-      state.selectedAreaId = a.id;
-      $("#selected-area-id").value = a.id;
-      $("#area-name").value = a.name || "";
-      $("#area-polygon").value = fmt(a.polygon || []);
-    });
-    ul.appendChild(li);
-  });
-}
-
 function renderAdmin() {
   $("#admin-set-meta").textContent = state.adminMeta ? fmt(state.adminMeta) : "";
 
@@ -271,19 +274,10 @@ function renderAdmin() {
     },
   }));
 
-  const polys = state.areaDraft.length ? [state.areaDraft] : [];
   renderMap($("#admin-map"), state.adminMeta, {
     dots,
-    polygons: polys,
     onClick: ({ x, y }) => {
       if (x == null || y == null) return;
-      // Om vi håller på med område: add punkt
-      if ($("#area-name").value.trim()) {
-        state.areaDraft.push({ x, y });
-        $("#area-polygon").value = fmt(state.areaDraft);
-        renderAdmin();
-        return;
-      }
       // annars: sätt stand x/y draft
       $("#stand-x").value = x;
       $("#stand-y").value = y;
@@ -291,7 +285,6 @@ function renderAdmin() {
   });
 
   renderStandsList(state.adminMeta || {});
-  renderAreasList(state.adminMeta || {});
 }
 
 async function refreshAdminMeta() {
@@ -300,16 +293,6 @@ async function refreshAdminMeta() {
   state.adminSetId = setId;
   state.adminMeta = await loadSetMeta(setId);
   renderAdmin();
-}
-
-async function refreshQuizSelectors(setId) {
-  const meta = await loadSetMeta(setId);
-  const sel = $("#quiz-area-select");
-  sel.innerHTML = "";
-  sel.appendChild(el("option", { value: "", text: "(alla)" }));
-  (meta.areas || []).forEach((a) => {
-    sel.appendChild(el("option", { value: a.id, text: a.name }));
-  });
 }
 
 function renderQuizPack(meta, pack) {
@@ -412,7 +395,8 @@ function advanceQuiz() {
   if (state.quiz.idx >= q.length) {
     state.quiz.current = null;
     $("#quiz-question").textContent = "Klart!";
-    updateScore();
+    const pct = updateScore();
+    showToast(`Klart! Du fick ${pct}% score.`);
     return;
   }
   state.quiz.current = q[state.quiz.idx];
@@ -424,12 +408,9 @@ function advanceQuiz() {
 
 async function startQuiz() {
   const setId = selectedSetId("quiz");
-  const areaId = $("#quiz-area-select").value || "";
-  const count = Math.max(1, Math.min(200, Number($("#quiz-count").value || 10)));
+  const mode = ($("#quiz-mode")?.value || "rand10");
   const qs = new URLSearchParams();
-  if (areaId) qs.set("areaId", areaId);
-  qs.set("count", String(count));
-  qs.set("mode", "rand");
+  qs.set("mode", mode);
 
   const meta = await loadSetMeta(setId);
   const r = await api(`/api/sets/${encodeURIComponent(setId)}/quiz?${qs.toString()}`);
@@ -471,7 +452,6 @@ $("#create-set").addEventListener("click", async () => {
     $("#new-set-name").value = "";
     await refreshSets();
     await refreshAdminMeta();
-    await refreshQuizSelectors(selectedSetId("quiz"));
   } catch (e) {
     alert(String(e));
   }
@@ -559,51 +539,6 @@ $("#delete-stand").addEventListener("click", async () => {
   }
 });
 
-$("#clear-area").addEventListener("click", () => {
-  state.areaDraft = [];
-  $("#area-polygon").value = "[]";
-  renderAdmin();
-});
-
-$("#save-area").addEventListener("click", async () => {
-  const setId = selectedSetId("admin");
-  const name = $("#area-name").value.trim();
-  if (!setId) return alert("Välj set.");
-  if (!name) return alert("Ange namn (det aktiverar även “klicka för polygon”).");
-  let polygon = [];
-  try {
-    polygon = JSON.parse($("#area-polygon").value || "[]");
-  } catch {
-    return alert("Ogiltig polygon-JSON.");
-  }
-  if (!Array.isArray(polygon) || polygon.length < 3) return alert("Polygon behöver minst 3 punkter.");
-  try {
-    await api(`/api/admin/sets/${encodeURIComponent(setId)}/areas`, { method: "POST", admin: true, jsonBody: { name, polygon } });
-    state.areaDraft = [];
-    $("#area-polygon").value = "[]";
-    await refreshAdminMeta();
-  } catch (e) {
-    alert(String(e));
-  }
-});
-
-$("#delete-area").addEventListener("click", async () => {
-  const areaId = $("#selected-area-id").value.trim();
-  if (!areaId) return alert("Välj område.");
-  if (!confirm("Radera område?")) return;
-  try {
-    await api(`/api/admin/areas/${encodeURIComponent(areaId)}`, { method: "DELETE", admin: true });
-    $("#selected-area-id").value = "";
-    await refreshAdminMeta();
-  } catch (e) {
-    alert(String(e));
-  }
-});
-
-$("#quiz-set-select").addEventListener("change", async () => {
-  try { await refreshQuizSelectors(selectedSetId("quiz")); } catch (e) { alert(String(e)); }
-});
-
 $("#start-quiz").addEventListener("click", async () => {
   try { await startQuiz(); } catch (e) { alert(String(e)); }
 });
@@ -620,7 +555,6 @@ $("#start-quiz").addEventListener("click", async () => {
   });
   refreshSets()
     .then(() => refreshAdminMeta())
-    .then(() => refreshQuizSelectors(selectedSetId("quiz")))
     .catch((e) => console.error(e));
 })();
 
