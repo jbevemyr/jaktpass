@@ -61,6 +61,13 @@ function showView(name) {
   $("#view-quiz").classList.toggle("active", name === "quiz");
   $("#tab-admin").classList.toggle("active", name === "admin");
   $("#tab-quiz").classList.toggle("active", name === "quiz");
+  setTopNavVisibility(name);
+}
+
+function setTopNavVisibility(view) {
+  // När man delar /quiz ska användare inte se några spår av admin (tabs + logout).
+  const tabs = document.querySelector("header.top .tabs");
+  if (tabs) tabs.style.display = view === "quiz" ? "none" : "";
 }
 
 function viewFromPath(pathname) {
@@ -83,7 +90,8 @@ function setAdminAuthed(ok) {
   const adminOnly = document.querySelector("#admin-only");
   if (adminOnly) adminOnly.style.display = ok ? "" : "none";
   const logout = document.querySelector("#logout-btn");
-  if (logout) logout.style.display = ok ? "" : "none";
+  // Visa aldrig logout-knappen i quiz-läget (ingen admin-trace).
+  if (logout) logout.style.display = ok && viewFromPath(location.pathname) === "admin" ? "" : "none";
   if (viewFromPath(location.pathname) === "admin") {
     showLoginModal(!ok);
   }
