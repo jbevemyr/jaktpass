@@ -30,6 +30,7 @@
             <div class="hint">Sparas i localStorage. Skickas som <code>Authorization: Basic ...</code> på /api/admin/*</div>
           </div>
 
+          <div id="admin-only">
           <div class="card">
             <h3>Set</h3>
             <div class="row">
@@ -77,27 +78,12 @@
               <ul id="stands-list" class="list"></ul>
             </div>
 
-            <div class="card">
-              <h3>Områden (areas)</h3>
-              <div class="hint">MVP: klicka i bilden för att lägga polygonpunkter. Klicka “Spara område”.</div>
-              <div class="row">
-                <label>Namn <input id="area-name" type="text" /></label>
-                <button id="save-area">Spara område</button>
-                <button id="clear-area">Rensa punkter</button>
-              </div>
-              <div class="row">
-                <label>Valt areaId <input id="selected-area-id" type="text" readonly /></label>
-                <button id="delete-area">Radera valt</button>
-              </div>
-              <div class="hint">Redigera polygon som JSON ([{x,y},...]) om du vill:</div>
-              <textarea id="area-polygon" rows="6" class="textarea"></textarea>
-              <ul id="areas-list" class="list"></ul>
-            </div>
           </div>
 
           <div class="card">
             <h3>Karta</h3>
             <div id="admin-map" class="map"></div>
+          </div>
           </div>
         </section>
 
@@ -108,14 +94,16 @@
               <label>Set
                 <select id="quiz-set-select"></select>
               </label>
-              <label>Område (valfritt)
-                <select id="quiz-area-select"></select>
-              </label>
-              <label>Antal frågor
-                <input id="quiz-count" type="number" min="1" max="200" value="10" />
+              <label>Typ
+                <select id="quiz-mode">
+                  <option value="rand10" selected>10 slumpmässiga</option>
+                  <option value="randHalf">Hälften slumpmässiga</option>
+                  <option value="all">Alla pass</option>
+                </select>
               </label>
               <button id="start-quiz">Starta</button>
             </div>
+            <div class="hint">Välj quiz-typ: 10 slump, halva slump, eller alla pass.</div>
           </div>
 
           <div class="card">

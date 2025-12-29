@@ -464,27 +464,22 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and len(segs) == 3 and segs[0] == "sets" and segs[2] == "quiz":
                 set_id = unquote(segs[1])
                 qs = parse_qs(u.query or "")
-                area_id = (qs.get("areaId") or [None])[0]
-                count_s = (qs.get("count") or ["10"])[0]
-                try:
-                    count = max(1, min(200, int(count_s)))
-                except Exception:
-                    count = 10
+                mode = (qs.get("mode") or ["rand10"])[0]
                 try:
                     meta = load_set_meta(set_id)
                 except FileNotFoundError:
                     return self._err(404, "set_not_found", {"setId": set_id})
                 stands = meta.get("stands") or []
-                areas = meta.get("areas") or []
-                visible = stands
-                if area_id:
-                    area = next((a for a in areas if (a.get("id") or "") == area_id), None)
-                    if not area:
-                        return self._err(404, "area_not_found", {"areaId": area_id})
-                    poly = area.get("polygon") or []
-                    visible = filter_stands_in_polygon(stands, poly)
-                visible_dots = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y")} for s in visible]
-                sample = shuffle_take(visible, count)
+                # Quiz-modes: 10 slump, halva slump, eller alla
+                n0 = len(stands)
+                if mode in ("all",):
+                    count = n0
+                elif mode in ("randHalf", "half"):
+                    count = (n0 + 1) // 2
+                else:
+                    count = 10
+                sample = shuffle_take(stands, count)
+                visible_dots = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y")} for s in sample]
                 questions = [{"standId": s.get("id"), "name": s.get("name")} for s in sample]
                 return self._ok({"visibleStands": visible_dots, "questions": questions})
 
@@ -516,6 +511,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._require_admin():
                     return
 
+            if method == "GET" and segs == ["admin", "ping"]:
+                return self._ok({"authenticated": True})
+
             if method == "POST" and segs == ["admin", "sets"]:
                 body = self._read_json_body()
                 if body is None:
@@ -528,7 +526,6 @@ class Handler(BaseHTTPRequestHandler):
                     "set": {"id": set_id, "name": name, "createdAt": now_rfc3339()},
                     "image": None,
                     "stands": [],
-                    "areas": [],
                 }
                 save_set_meta(set_id, meta)
                 return self._ok({"id": set_id}, code=201)
@@ -626,58 +623,7 @@ class Handler(BaseHTTPRequestHandler):
                     save_set_meta(set_id, meta)
                     return self._ok(found)
 
-            if method == "POST" and len(segs) == 4 and segs[:2] == ["admin", "sets"] and segs[3] == "areas":
-                set_id = unquote(segs[2])
-                body = self._read_json_body()
-                if body is None:
-                    return self._err(400, "invalid_json", {})
-                name = validate_nonempty_string(body.get("name"))
-                poly = validate_polygon(body.get("polygon"))
-                if not name or not poly:
-                    return self._err(400, "invalid_payload", {"expected": "name + polygon(min 3 points)"})
-                with with_set_lock(set_id):
-                    try:
-                        meta = load_set_meta(set_id)
-                    except FileNotFoundError:
-                        return self._err(404, "set_not_found", {"setId": set_id})
-                    now = now_rfc3339()
-                    area = {"id": uuid_v4(), "name": name, "polygon": poly, "createdAt": now, "updatedAt": now}
-                    meta["areas"] = [area] + (meta.get("areas") or [])
-                    save_set_meta(set_id, meta)
-                    return self._ok(area, code=201)
-
-            if method in ("PATCH", "DELETE") and len(segs) == 3 and segs[:2] == ["admin", "areas"]:
-                area_id = unquote(segs[2])
-                set_id = find_entity_set("areas", area_id)
-                if not set_id:
-                    return self._err(404, "not_found", {"id": area_id})
-                with with_set_lock(set_id):
-                    meta = load_set_meta(set_id)
-                    areas = meta.get("areas") or []
-                    found, rest = split_by_id(areas, area_id)
-                    if not found:
-                        return self._err(404, "not_found", {"id": area_id})
-                    if method == "DELETE":
-                        meta["areas"] = rest
-                        save_set_meta(set_id, meta)
-                        return self._ok({"deleted": True})
-                    body = self._read_json_body()
-                    if body is None:
-                        return self._err(400, "invalid_json", {})
-                    if "name" in body:
-                        nm = validate_nonempty_string(body.get("name"))
-                        if not nm:
-                            return self._err(400, "invalid_payload", {"details": "name: invalid"})
-                        found["name"] = nm
-                    if "polygon" in body:
-                        poly = validate_polygon(body.get("polygon"))
-                        if not poly:
-                            return self._err(400, "invalid_payload", {"details": "polygon: invalid"})
-                        found["polygon"] = poly
-                    found["updatedAt"] = now_rfc3339()
-                    meta["areas"] = [found] + rest
-                    save_set_meta(set_id, meta)
-                    return self._ok(found)
+            # NOTE: areas (områden) är borttagna i denna MVP.
 
             return self._err(404, "not_found", {"path": path})
         except Exception as e:

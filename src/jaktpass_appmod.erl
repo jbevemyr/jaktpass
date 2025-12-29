@@ -47,6 +47,8 @@ dispatch('GET', ["media", "sets", SetId, "image"], _A) ->
     handle_get_image(SetId);
 
 %% Admin
+dispatch('GET', ["admin", "ping"], A) ->
+    with_admin(A, fun() -> json_ok(200, #{<<"authenticated">> => true}) end);
 dispatch('POST', ["admin", "sets"], A) ->
     with_admin(A, fun() -> handle_post_admin_sets(A) end);
 dispatch('POST', ["admin", "sets", SetId, "image"], A) ->
@@ -57,13 +59,6 @@ dispatch('PATCH', ["admin", "stands", StandId], A) ->
     with_admin(A, fun() -> handle_patch_admin_stand(StandId, A) end);
 dispatch('DELETE', ["admin", "stands", StandId], A) ->
     with_admin(A, fun() -> handle_delete_admin_stand(StandId) end);
-
-dispatch('POST', ["admin", "sets", SetId, "areas"], A) ->
-    with_admin(A, fun() -> handle_post_admin_set_areas(SetId, A) end);
-dispatch('PATCH', ["admin", "areas", AreaId], A) ->
-    with_admin(A, fun() -> handle_patch_admin_area(AreaId, A) end);
-dispatch('DELETE', ["admin", "areas", AreaId], A) ->
-    with_admin(A, fun() -> handle_delete_admin_area(AreaId) end);
 
 dispatch(_Method, _Segs, _A) ->
     json_error(404, <<"not_found">>, #{<<"path">> => <<"unknown">>}).
@@ -100,41 +95,29 @@ handle_get_set(SetId) ->
 
 handle_get_quiz(SetId, A) ->
     Q = query_map(A),
-    AreaId = maps:get(<<"areaId">>, Q, undefined),
-    Count0 = maps:get(<<"count">>, Q, <<"10">>),
-    Count = clamp_int(Count0, 1, 200, 10),
-    _Mode = maps:get(<<"mode">>, Q, <<"rand">>),
+    Mode0 = maps:get(<<"mode">>, Q, <<"rand10">>),
     case load_set_meta(SetId) of
         {ok, Meta} ->
             Stands0 = maps:get(<<"stands">>, Meta, []),
-            Areas0  = maps:get(<<"areas">>, Meta, []),
-            case
-                (case AreaId of
-                     undefined -> {ok, Stands0};
-                     <<>> -> {ok, Stands0};
-                     _ ->
-                         case find_by_id(Areas0, AreaId) of
-                             {ok, Area} ->
-                                 Poly = maps:get(<<"polygon">>, Area, []),
-                                 {ok, filter_stands_in_poly(Stands0, Poly)};
-                             not_found ->
-                                 {error, area_not_found}
-                         end
-                 end)
-            of
-                {error, area_not_found} ->
-                    json_error(404, <<"area_not_found">>, #{<<"areaId">> => AreaId});
-                {ok, VisibleStands} ->
-                    VisibleDots = [#{<<"id">> => maps:get(<<"id">>, S),
-                                     <<"x">> => maps:get(<<"x">>, S),
-                                     <<"y">> => maps:get(<<"y">>, S)} || S <- VisibleStands],
-                    seed_rand(),
-                    Sample = take_n(shuffle(VisibleStands), Count),
-                    Questions = [#{<<"standId">> => maps:get(<<"id">>, S),
-                                   <<"name">> => maps:get(<<"name">>, S)} || S <- Sample],
-                    json_ok(200, #{<<"visibleStands">> => VisibleDots,
-                                   <<"questions">> => Questions})
-            end;
+            seed_rand(),
+            N0 = length(Stands0),
+            Count =
+                case Mode0 of
+                    <<"all">> -> N0;
+                    <<"randHalf">> -> (N0 + 1) div 2;
+                    <<"half">> -> (N0 + 1) div 2;
+                    <<"rand10">> -> 10;
+                    <<"rand">> -> 10;
+                    _ -> 10
+                end,
+            Sample = take_n(shuffle(Stands0), Count),
+            VisibleDots = [#{<<"id">> => maps:get(<<"id">>, S),
+                             <<"x">> => maps:get(<<"x">>, S),
+                             <<"y">> => maps:get(<<"y">>, S)} || S <- Sample],
+            Questions = [#{<<"standId">> => maps:get(<<"id">>, S),
+                           <<"name">> => maps:get(<<"name">>, S)} || S <- Sample],
+            json_ok(200, #{<<"visibleStands">> => VisibleDots,
+                           <<"questions">> => Questions});
         {error, enoent} ->
             json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
         {error, Reason} ->
@@ -184,8 +167,7 @@ handle_post_admin_sets(A) ->
                     Meta = #{
                         <<"set">> => #{<<"id">> => to_bin(SetId), <<"name">> => Name, <<"createdAt">> => Now},
                         <<"image">> => null,
-                        <<"stands">> => [],
-                        <<"areas">> => []
+                        <<"stands">> => []
                     },
                     case save_set_meta(SetId, Meta) of
                         ok -> json_ok(201, #{<<"id">> => to_bin(SetId)});
@@ -310,59 +292,8 @@ handle_patch_admin_stand(StandId, A) ->
 handle_delete_admin_stand(StandId) ->
     delete_entity_by_id(<<"stands">>, StandId).
 
-handle_post_admin_set_areas(SetId, A) ->
-    with_set_lock(SetId, fun() ->
-        case {load_set_meta(SetId), read_json_body(A)} of
-            {{ok, Meta0}, {ok, Body}} ->
-                Name0 = maps:get(<<"name">>, Body, undefined),
-                Poly0 = maps:get(<<"polygon">>, Body, undefined),
-                case {validate_nonempty_string(Name0), validate_polygon(Poly0)} of
-                    {{ok, Name}, {ok, Poly}} ->
-                        Now = now_rfc3339(),
-                        Area = #{
-                            <<"id">> => to_bin(uuid_v4()),
-                            <<"name">> => Name,
-                            <<"polygon">> => Poly,
-                            <<"createdAt">> => Now,
-                            <<"updatedAt">> => Now
-                        },
-                        Areas0 = maps:get(<<"areas">>, Meta0, []),
-                        Meta = Meta0#{<<"areas">> => [Area | Areas0]},
-                        case save_set_meta(SetId, Meta) of
-                            ok -> json_ok(201, Area);
-                            {error, Reason} -> json_error(500, <<"failed_to_save_meta">>, #{<<"reason">> => to_bin(Reason)})
-                        end;
-                    _ ->
-                        json_error(400, <<"invalid_payload">>, #{<<"expected">> => <<"name + polygon(min 3 points)">>})
-                end;
-            {{error, enoent}, _} ->
-                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
-            {{error, Reason}, _} ->
-                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)});
-            {_, {error, Msg}} ->
-                json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
-        end
-    end).
-
-handle_patch_admin_area(AreaId, A) ->
-    case read_json_body(A) of
-        {ok, Body} ->
-            patch_entity_by_id(<<"areas">>, AreaId, fun(Area0) ->
-                Now = now_rfc3339(),
-                case maybe_updates([
-                        {<<"name">>, fun validate_nonempty_string/1},
-                        {<<"polygon">>, fun validate_polygon/1}
-                    ], Body, Area0) of
-                    {error, Msg} -> {error, Msg};
-                    {ok, Area2} -> {ok, Area2#{<<"updatedAt">> => Now}}
-                end
-            end);
-        {error, Msg} ->
-            json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
-    end.
-
-handle_delete_admin_area(AreaId) ->
-    delete_entity_by_id(<<"areas">>, AreaId).
+%% NOTE: areas (områden) är borttagna i denna MVP. Ev. äldre meta.json kan fortfarande ha "areas",
+%% men de används inte och inga /api/admin/*-endpoints finns för dem.
 
 %%====================================================================
 %% Auth

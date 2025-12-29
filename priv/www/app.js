@@ -43,6 +43,10 @@ async function api(path, { method = "GET", jsonBody, admin = false, multipart } 
   const isJson = ct.includes("application/json");
   const body = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
   if (!res.ok) {
+    // Om admin-auth fallerar: växla UI tillbaka till login-rutan
+    if (res.status === 401) {
+      setAdminAuthed(false);
+    }
     const err = body && body.error ? body.error : `HTTP ${res.status}`;
     const details = body && body.details ? body.details : body;
     throw new Error(`${err}${details ? " :: " + JSON.stringify(details) : ""}`);
@@ -69,14 +73,28 @@ function navigateTo(view) {
   const target = view === "admin" ? "/admin" : "/quiz";
   if (location.pathname !== target) history.pushState({ view }, "", target);
   showView(view);
-  // Enkel "måste logga in" hint: om inga creds, scrolla till auth-kortet.
-  if (view === "admin") {
-    const { user, pass } = getCreds();
-    if (!user || !pass) {
-      setTimeout(() => {
-        try { $("#admin-user")?.focus(); } catch {}
-      }, 0);
-    }
+  if (view === "admin") checkAdminAuthAndGate();
+}
+
+function setAdminAuthed(ok) {
+  const adminOnly = document.querySelector("#admin-only");
+  if (adminOnly) adminOnly.style.display = ok ? "" : "none";
+}
+
+async function checkAdminAuthAndGate() {
+  // Default: göm admin-innehåll tills vi lyckats auth:a
+  setAdminAuthed(false);
+  const { user, pass } = getCreds();
+  if (!user || !pass) {
+    try { $("#admin-user")?.focus(); } catch {}
+    return;
+  }
+  try {
+    await api("/api/admin/ping", { admin: true });
+    setAdminAuthed(true);
+  } catch {
+    setAdminAuthed(false);
+    try { $("#admin-user")?.focus(); } catch {}
   }
 }
 
@@ -442,6 +460,10 @@ $("#tab-quiz").addEventListener("click", () => navigateTo("quiz"));
 $("#save-creds").addEventListener("click", () => {
   setCreds($("#admin-user").value, $("#admin-pass").value);
   alert("Sparat.");
+  // Om vi är på admin-vyn: försök auth:a och visa innehåll direkt
+  if ($("#view-admin")?.classList.contains("active")) {
+    checkAdminAuthAndGate();
+  }
 });
 
 $("#create-set").addEventListener("click", async () => {
@@ -552,7 +574,10 @@ $("#start-quiz").addEventListener("click", async () => {
   navigateTo(viewFromPath(location.pathname));
   window.addEventListener("popstate", () => {
     showView(viewFromPath(location.pathname));
+    if (viewFromPath(location.pathname) === "admin") checkAdminAuthAndGate();
   });
+  // Init: om admin är aktiv, auth-gate:a
+  if (viewFromPath(location.pathname) === "admin") checkAdminAuthAndGate();
   refreshSets()
     .then(() => refreshAdminMeta())
     .catch((e) => console.error(e));
