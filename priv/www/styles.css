@@ -109,6 +109,11 @@ button.danger { background: var(--danger); color: #0b0d10; }
   border-radius: 12px;
   overflow: hidden;
 }
+.map.has-image {
+  /* När en bild finns: låt containern krympa till bildens verkliga höjd
+     så prickar/labels hamnar korrekt. */
+  min-height: 0;
+}
 .map img {
   width: 100%;
   height: auto;
@@ -117,9 +122,7 @@ button.danger { background: var(--danger); color: #0b0d10; }
 
 /* Kart-preview (modal): låt containern krympa till bildens verkliga höjd,
    annars hamnar prickar/labels i "tom yta" under bilden när .map min-height kickar in. */
-#map-preview-map.map {
-  min-height: 0;
-}
+#map-preview-map.map { min-height: 0; }
 .dot {
   position: absolute;
   width: 10px;

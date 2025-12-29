@@ -202,9 +202,13 @@ function normClick(imgEl, evt) {
 function renderMap(container, meta, { onClick, dots, polygons, labels } = {}) {
   container.innerHTML = "";
   if (!meta || !meta.imageUrl) {
+    container.classList.remove("has-image");
     container.appendChild(el("div", { class: "hint", text: "Ingen bild uppladdad ännu." }));
     return;
   }
+  // Viktigt: när vi har en bild vill vi att container-höjden ska följa bilden,
+  // annars hamnar prickar/labels fel (t.ex. pga .map min-height på mobil).
+  container.classList.add("has-image");
   const img = el("img", { src: meta.imageUrl, alt: meta.set?.name || "karta" });
   container.appendChild(img);
 
