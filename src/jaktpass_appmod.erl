@@ -596,51 +596,7 @@ split_by_id([E | Rest], Id, Acc) ->
         _ -> split_by_id(Rest, Id, [E | Acc])
     end.
 
-find_by_id(List0, Id0) ->
-    Id = to_bin(Id0),
-    case lists:filter(fun(E) -> maps:get(<<"id">>, E, undefined) =:= Id end, List0) of
-        [E | _] -> {ok, E};
-        [] -> not_found
-    end.
-
-%%====================================================================
-%% Geometry (point in polygon)
-%%====================================================================
-
-filter_stands_in_poly(Stands, Poly0) ->
-    Poly = [to_xy(P) || P <- Poly0],
-    lists:filter(fun(S) ->
-        {X, Y} = {maps:get(<<"x">>, S), maps:get(<<"y">>, S)},
-        point_in_polygon({X, Y}, Poly)
-    end, Stands).
-
-to_xy(#{<<"x">> := X, <<"y">> := Y}) -> {X, Y};
-to_xy(#{x := X, y := Y}) -> {X, Y};
-to_xy(#{<<"x">> := X, y := Y}) -> {X, Y};
-to_xy(#{x := X, <<"y">> := Y}) -> {X, Y};
-to_xy(_) -> {0.0, 0.0}.
-
-point_in_polygon({_Px, _Py}, []) -> false;
-point_in_polygon({Px, Py}, Poly) when length(Poly) < 3 -> false;
-point_in_polygon({Px, Py}, Poly) ->
-    Edges = edges(Poly),
-    Cnt =
-        lists:foldl(
-          fun({{X1, Y1}, {X2, Y2}}, Acc) ->
-              %% Ray casting: count intersections with horizontal ray to +inf
-              IntersectsY = ((Y1 > Py) =/= (Y2 > Py)),
-              if
-                  IntersectsY ->
-                      Xinters = (X2 - X1) * (Py - Y1) / (Y2 - Y1 + 0.0) + X1,
-                      if Px < Xinters -> Acc + 1; true -> Acc end;
-                  true ->
-                      Acc
-              end
-          end, 0, Edges),
-    (Cnt rem 2) =:= 1.
-
-edges([First | _] = Poly) ->
-    lists:zip(Poly, tl(Poly) ++ [First]).
+%% NOTE: områden/polygon-stöd är borttaget i denna MVP, så geometri-hjälpare är rensade.
 
 %%====================================================================
 %% Multipart (image upload)
@@ -721,7 +677,7 @@ jpeg_dims(Bin) ->
             {undefined, undefined}
     end.
 
-jpeg_scan(<<16#FF, Marker:8, Len:16/big, Payload/binary>>) when Marker =:= 16#C0; Marker =:= 16#C2 ->
+jpeg_scan(<<16#FF, Marker:8, _Len:16/big, Payload/binary>>) when Marker =:= 16#C0; Marker =:= 16#C2 ->
     %% SOF0 / SOF2: [precision][height][width]...
     case Payload of
         <<_Precision:8, H:16/big, W:16/big, _/binary>> ->
@@ -729,7 +685,7 @@ jpeg_scan(<<16#FF, Marker:8, Len:16/big, Payload/binary>>) when Marker =:= 16#C0
         _ ->
             {undefined, undefined}
     end;
-jpeg_scan(<<16#FF, Marker:8, Len:16/big, Rest/binary>>) ->
+jpeg_scan(<<16#FF, _Marker:8, Len:16/big, Rest/binary>>) ->
     Skip = Len - 2,
     case Rest of
         <<_Skip:Skip/binary, Tail/binary>> ->
@@ -827,24 +783,7 @@ validate_norm_coord(L) when is_list(L) ->
     validate_norm_coord(list_to_binary(L));
 validate_norm_coord(_) -> {error, <<"invalid_type">>}.
 
-validate_polygon(Poly) when is_list(Poly) ->
-    case length(Poly) >= 3 of
-        false -> {error, <<"too_few_points">>};
-        true ->
-            case lists:all(fun is_valid_point/1, Poly) of
-                true ->
-                    %% Normalize to [{"x":float,"y":float},...]
-                    {ok, [#{<<"x">> => X, <<"y">> => Y} || {X,Y} <- [to_xy(P) || P <- Poly]]};
-                false ->
-                    {error, <<"invalid_points">>}
-            end
-    end;
-validate_polygon(_) ->
-    {error, <<"invalid_type">>}.
-
-is_valid_point(P) ->
-    {X, Y} = to_xy(P),
-    is_number(X) andalso is_number(Y) andalso X >= 0.0 andalso X =< 1.0 andalso Y >= 0.0 andalso Y =< 1.0.
+%% NOTE: validate_polygon/is_valid_point borttaget (områden stöds ej längre).
 
 maybe_updates(Specs, Body, Obj0) ->
     %% If a field is present but invalid => error (strict PATCH)
@@ -904,21 +843,7 @@ split_path(Path0) ->
     Segs0 = string:tokens(Path, "/"),
     [S || S <- Segs0, S =/= ""].
 
-clamp_int(BinOrNum, Min, Max, Default) ->
-    N =
-        case BinOrNum of
-            I when is_integer(I) -> I;
-            F when is_float(F) -> trunc(F);
-            B when is_binary(B) ->
-                case catch binary_to_integer(B) of
-                    I2 when is_integer(I2) -> I2;
-                    _ -> Default
-                end;
-            L when is_list(L) ->
-                clamp_int(list_to_binary(L), Min, Max, Default);
-            _ -> Default
-        end,
-    erlang:max(Min, erlang:min(Max, N)).
+%% NOTE: clamp_int/4 borttaget (används ej längre).
 
 seed_rand() ->
     _ = rand:seed(exsplus, {erlang:monotonic_time(), erlang:unique_integer([positive]), erlang:phash2(self())}),
