@@ -330,17 +330,11 @@ with_admin(A, Fun) ->
 check_admin_auth(A) ->
     AdminUser = getenv_default("JAKTPASS_ADMIN_USER", "admin"),
     AdminPass = getenv_default("JAKTPASS_ADMIN_PASS", "admin"),
-    Auth = find_header_lower("authorization", A#arg.headers),
-    case Auth of
-        undefined ->
-            {error, unauthorized()};
-        Val ->
-            case parse_basic_auth(Val) of
-                {ok, {User, Pass}} when User =:= AdminUser, Pass =:= AdminPass ->
-                    ok;
-                _ ->
-                    {error, unauthorized()}
-            end
+    case get_basic_auth(A#arg.headers) of
+        {ok, {User, Pass}} when User =:= AdminUser, Pass =:= AdminPass ->
+            ok;
+        _ ->
+            {error, unauthorized()}
     end.
 
 unauthorized() ->
@@ -373,23 +367,42 @@ parse_basic_auth(Val0) ->
             error
     end.
 
-find_header_lower(NameLower, H) ->
-    %% Different Yaws versions expose either find_header_value/2 or find_header/2.
-    case erlang:function_exported(yaws_api, find_header_value, 2) of
-        true ->
-            yaws_api:find_header_value(NameLower, H);
-        false ->
-            case erlang:function_exported(yaws_api, find_header, 2) of
-                true ->
-                    case yaws_api:find_header(NameLower, H) of
-                        undefined -> undefined;
-                        {ok, V} -> V;
-                        V -> V
-                    end;
-                false ->
-                    undefined
-            end
-    end.
+%% Yaws kan redan ha parsat Basic Auth till ett tuple-fält:
+%%   #headers.authorization = {User, Pass, RawHeader}
+%% I andra fall kan authorization vara en sträng ("Basic ...") eller saknas.
+get_basic_auth(H) when is_record(H, headers) ->
+    case H#headers.authorization of
+        {User, Pass, _Raw} when is_list(User), is_list(Pass) ->
+            {ok, {User, Pass}};
+        {User, Pass} when is_list(User), is_list(Pass) ->
+            {ok, {User, Pass}};
+        undefined ->
+            %% Fallback: leta i "other" efter Authorization-headern
+            case find_other_header_value("authorization", H#headers.other) of
+                undefined -> error;
+                Val -> parse_basic_auth(Val)
+            end;
+        Val ->
+            %% Kan vara "Basic ...."
+            parse_basic_auth(Val)
+    end;
+get_basic_auth(_Other) ->
+    error.
+
+find_other_header_value(_NameLower, []) ->
+    undefined;
+find_other_header_value(NameLower, [{http_header, _I, Name, _Reserved, Val} | Rest]) ->
+    case string:lowercase(header_name_to_list(Name)) of
+        NameLower -> Val;
+        _ -> find_other_header_value(NameLower, Rest)
+    end;
+find_other_header_value(NameLower, [_ | Rest]) ->
+    find_other_header_value(NameLower, Rest).
+
+header_name_to_list(N) when is_atom(N) -> atom_to_list(N);
+header_name_to_list(N) when is_list(N) -> N;
+header_name_to_list(N) when is_binary(N) -> binary_to_list(N);
+header_name_to_list(_) -> "".
 
 %%====================================================================
 %% Disk / JSON
