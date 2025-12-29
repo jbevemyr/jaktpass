@@ -114,6 +114,12 @@ button.danger { background: var(--danger); color: #0b0d10; }
   height: auto;
   display:block;
 }
+
+/* Kart-preview (modal): låt containern krympa till bildens verkliga höjd,
+   annars hamnar prickar/labels i "tom yta" under bilden när .map min-height kickar in. */
+#map-preview-map.map {
+  min-height: 0;
+}
 .dot {
   position: absolute;
   width: 10px;
