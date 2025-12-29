@@ -103,13 +103,12 @@ button.danger { background: var(--danger); color: #0b0d10; }
   font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.2px;
-  align-self: center;
 }
 .quiz-head {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  align-self: center;
+  align-items: flex-start;
 }
 .quiz-instr {
   color: var(--muted);
