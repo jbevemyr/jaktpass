@@ -10,8 +10,8 @@
 -export([out/1]).
 
 %% Yaws records (#arg, #http_request, #headers, ...)
--include_lib("yaws/include/yaws_api.hrl").
--include_lib("yaws/include/yaws.hrl").
+%% OTP 22: använd lokal header (incheckad i repo) istället för include_lib(...)
+-include("yaws_api.hrl").
 
 %%====================================================================
 %% Entry
@@ -343,7 +343,7 @@ unauthorized() ->
     [{status, 401},
      {header, {"WWW-Authenticate", "Basic realm=\"jaktpass-admin\""}},
      {header, {"Content-Type", "application/json"}},
-     {content, "application/json", iolist_to_binary(json:encode(#{
+     {content, "application/json", iolist_to_binary(json_encode(#{
          <<"ok">> => false,
          <<"error">> => <<"unauthorized">>,
          <<"details">> => <<"Missing or invalid Basic Auth">>
@@ -438,7 +438,7 @@ load_set_meta(SetId) ->
     case file:read_file(Path) of
         {ok, Bin} ->
             try
-                {ok, json:decode(Bin)}
+                {ok, json_decode(Bin)}
             catch _:_ ->
                 {error, invalid_json}
             end;
@@ -453,7 +453,7 @@ save_set_meta(SetId, Meta) ->
 
 write_json_atomic(Path, Term) ->
     Tmp = Path ++ ".tmp",
-    Bin = iolist_to_binary(json:encode(Term)),
+    Bin = iolist_to_binary(json_encode(Term)),
     case file:write_file(Tmp, Bin) of
         ok -> file:rename(Tmp, Path);
         {error, Reason} -> {error, Reason}
@@ -770,7 +770,7 @@ read_json_body(A) ->
     case recv_body_bin(A) of
         {ok, Bin} ->
             try
-                {ok, json:decode(Bin)}
+                {ok, json_decode(Bin)}
             catch _:_ ->
                 {error, <<"could_not_decode_json">>}
             end;
@@ -877,12 +877,7 @@ query_map(A) ->
     case Q0 of
         "" -> #{};
         _ ->
-            try
-                Pairs = uri_string:dissect_query(Q0),
-                maps:from_list([{to_bin(K), to_bin(V)} || {K, V} <- Pairs])
-            catch _:_ ->
-                #{}
-            end
+            parse_querystring(Q0)
     end.
 
 strip_api_prefix(Path0) ->
@@ -952,7 +947,9 @@ take_n([H | T], N, Acc) ->
     take_n(T, N - 1, [H | Acc]).
 
 now_rfc3339() ->
-    calendar:system_time_to_rfc3339(erlang:system_time(second), [{offset, "Z"}]).
+    %% OTP 22-kompatibel RFC3339 (UTC, Z)
+    {{Y,Mo,D},{H,Mi,S}} = calendar:universal_time(),
+    iolist_to_binary(io_lib:format("~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ", [Y,Mo,D,H,Mi,S])).
 
 uuid_v4() ->
     <<A:32, B:16, C0:16, D0:16, E:48>> = crypto:strong_rand_bytes(16),
@@ -986,15 +983,232 @@ to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
 %%====================================================================
 
 json_ok(Code, Data) ->
-    Body = iolist_to_binary(json:encode(#{<<"ok">> => true, <<"data">> => Data})),
+    Body = iolist_to_binary(json_encode(#{<<"ok">> => true, <<"data">> => Data})),
     [{status, Code},
      {header, {"Content-Type", "application/json"}},
      {content, "application/json", Body}].
 
 json_error(Code, Err, Details) ->
-    Body = iolist_to_binary(json:encode(#{<<"ok">> => false, <<"error">> => Err, <<"details">> => Details})),
+    Body = iolist_to_binary(json_encode(#{<<"ok">> => false, <<"error">> => Err, <<"details">> => Details})),
     [{status, Code},
      {header, {"Content-Type", "application/json"}},
      {content, "application/json", Body}].
 
+%%====================================================================
+%% OTP 22-compatible JSON + query parsing
+%%====================================================================
+
+%% Minimal JSON encoder/decoder to avoid OTP 27+ built-in json module dependency.
+%% Supports:
+%% - maps with binary/list/atom keys (encoded as JSON strings)
+%% - lists (JSON arrays)
+%% - binaries/lists (JSON strings, UTF-8 bytes kept as-is)
+%% - integers/floats
+%% - atoms true/false/null
+
+json_encode(Term) ->
+    encode_value(Term).
+
+encode_value(null) -> <<"null">>;
+encode_value(true) -> <<"true">>;
+encode_value(false) -> <<"false">>;
+encode_value(I) when is_integer(I) -> integer_to_binary(I);
+encode_value(F) when is_float(F) -> float_to_binary(F, [compact]);
+encode_value(B) when is_binary(B) -> encode_string(B);
+encode_value(L) when is_list(L) ->
+    %% Heuristic: treat as string if it's a flat (byte) list, else array
+    case is_flat_string_list(L) of
+        true -> encode_string(iolist_to_binary(L));
+        false -> encode_array(L)
+    end;
+encode_value(M) when is_map(M) -> encode_object(M);
+encode_value(Other) ->
+    %% Fallback: represent as string
+    encode_string(to_bin(Other)).
+
+is_flat_string_list([]) -> true;
+is_flat_string_list(L) ->
+    lists:all(fun(C) -> is_integer(C) andalso C >= 0 andalso C =< 255 end, L).
+
+encode_array(List) ->
+    Inner = join_iolist([encode_value(V) || V <- List], <<",">>),
+    [<<"[">>, Inner, <<"]">>].
+
+encode_object(Map) ->
+    Pairs0 = maps:to_list(Map),
+    %% Stable-ish ordering for deterministic output (key as binary)
+    Pairs = lists:sort(fun({K1,_},{K2,_}) -> to_bin(K1) =< to_bin(K2) end, Pairs0),
+    Inner = join_iolist([encode_kv(K,V) || {K,V} <- Pairs], <<",">>),
+    [<<"{">>, Inner, <<"}">>].
+
+encode_kv(K, V) ->
+    [encode_string(to_bin(K)), <<":">>, encode_value(V)].
+
+encode_string(Bin) ->
+    Esc = escape_json_string(binary_to_list(Bin), []),
+    [<<"\"">>, lists:reverse(Esc), <<"\"">>].
+
+escape_json_string([], Acc) ->
+    Acc;
+escape_json_string([$\n | T], Acc) ->
+    escape_json_string(T, [$n, $\\ | Acc]);
+escape_json_string([$\r | T], Acc) ->
+    escape_json_string(T, [$r, $\\ | Acc]);
+escape_json_string([$\t | T], Acc) ->
+    escape_json_string(T, [$t, $\\ | Acc]);
+escape_json_string([$\\ | T], Acc) ->
+    escape_json_string(T, [$\\, $\\ | Acc]);
+escape_json_string([$\" | T], Acc) ->
+    escape_json_string(T, [$\", $\\ | Acc]);
+escape_json_string([C | T], Acc) when C < 32 ->
+    %% Control char -> \u00XX
+    [H1,H2] = lists:flatten(io_lib:format("~2.16.0B", [C])),
+    %% Acc byggs baklänges, så vi pushar omvänt: X2 X1 0 0 u \
+    escape_json_string(T, [H2, H1, $0, $0, $u, $\\ | Acc]);
+escape_json_string([C | T], Acc) ->
+    escape_json_string(T, [C | Acc]).
+
+join_iolist([], _Sep) -> <<>>;
+join_iolist([One], _Sep) -> One;
+join_iolist([H|T], Sep) ->
+    [H, [[Sep, X] || X <- T]].
+
+json_decode(Bin) when is_binary(Bin) ->
+    {V, Rest} = parse_value(skip_ws(binary_to_list(Bin))),
+    case skip_ws(Rest) of
+        [] -> V;
+        _ -> V
+    end.
+
+skip_ws([C|T]) when C =:= $\s; C =:= $\t; C =:= $\n; C =:= $\r -> skip_ws(T);
+skip_ws(L) -> L.
+
+parse_value([$\" | T]) ->
+    parse_string(T, []);
+parse_value([$\{ | T]) ->
+    parse_object(skip_ws(T), #{});
+parse_value([$[ | T]) ->
+    parse_array(skip_ws(T), []);
+parse_value([$t,$r,$u,$e | T]) -> {true, T};
+parse_value([$f,$a,$l,$s,$e | T]) -> {false, T};
+parse_value([$n,$u,$l,$l | T]) -> {null, T};
+parse_value([C|_]=L) when (C >= $0 andalso C =< $9) orelse C =:= $- ->
+    parse_number(L);
+parse_value([]) -> {null, []}.
+
+parse_object([$} | T], Acc) ->
+    {Acc, T};
+parse_object(L, Acc) ->
+    %% key
+    {K, Rest1} = case L of
+                     [$\" | T] -> parse_string(T, []);
+                     _ -> {<<>>, L}
+                 end,
+    Rest2 = skip_ws(Rest1),
+    Rest3 = case Rest2 of [$:|T3] -> skip_ws(T3); _ -> Rest2 end,
+    {V, Rest4} = parse_value(Rest3),
+    Acc2 = Acc#{K => V},
+    Rest5 = skip_ws(Rest4),
+    case Rest5 of
+        [$,|T5] -> parse_object(skip_ws(T5), Acc2);
+        [$}|T5] -> {Acc2, T5};
+        _ -> {Acc2, Rest5}
+    end.
+
+parse_array([$] | T], AccRev) ->
+    {lists:reverse(AccRev), T};
+parse_array(L, AccRev) ->
+    {V, Rest1} = parse_value(L),
+    Rest2 = skip_ws(Rest1),
+    case Rest2 of
+        [$,|T2] -> parse_array(skip_ws(T2), [V | AccRev]);
+        [$]|T2] -> {lists:reverse([V | AccRev]), T2};
+        _ -> {lists:reverse([V | AccRev]), Rest2}
+    end.
+
+parse_string([$\" | T], AccRev) ->
+    {list_to_binary(lists:reverse(AccRev)), T};
+parse_string([$\\, Esc | T], AccRev) ->
+    case Esc of
+        $\" -> parse_string(T, [$\" | AccRev]);
+        $\\ -> parse_string(T, [$\\ | AccRev]);
+        $/  -> parse_string(T, [$/  | AccRev]);
+        $b  -> parse_string(T, [$\b | AccRev]);
+        $f  -> parse_string(T, [$\f | AccRev]);
+        $n  -> parse_string(T, [$\n | AccRev]);
+        $r  -> parse_string(T, [$\r | AccRev]);
+        $t  -> parse_string(T, [$\t | AccRev]);
+        $u  ->
+            case T of
+                [H1,H2,H3,H4 | T2] ->
+                    Code = hex4_to_int(H1,H2,H3,H4),
+                    Bin = unicode:characters_to_binary([Code], utf8),
+                    parse_string(T2, lists:reverse(binary_to_list(Bin), AccRev));
+                _ ->
+                    parse_string(T, AccRev)
+            end;
+        _ ->
+            parse_string(T, [Esc | AccRev])
+    end;
+parse_string([C | T], AccRev) ->
+    parse_string(T, [C | AccRev]);
+parse_string([], AccRev) ->
+    {list_to_binary(lists:reverse(AccRev)), []}.
+
+hex4_to_int(A,B,C,D) ->
+    (hex_to_int(A) bsl 12) bor (hex_to_int(B) bsl 8) bor (hex_to_int(C) bsl 4) bor hex_to_int(D).
+
+hex_to_int(C) when C >= $0, C =< $9 -> C - $0;
+hex_to_int(C) when C >= $A, C =< $F -> 10 + (C - $A);
+hex_to_int(C) when C >= $a, C =< $f -> 10 + (C - $a);
+hex_to_int(_) -> 0.
+
+parse_number(L) ->
+    {Tok, Rest} = take_number_token(L, []),
+    TokStr = lists:reverse(Tok),
+    case lists:member($., TokStr) orelse lists:member($e, TokStr) orelse lists:member($E, TokStr) of
+        true ->
+            {list_to_float_safe(TokStr), Rest};
+        false ->
+            {list_to_integer_safe(TokStr), Rest}
+    end.
+
+take_number_token([C|T], Acc) when (C >= $0 andalso C =< $9) orelse C =:= $- orelse C =:= $+ orelse C =:= $. orelse C =:= $e orelse C =:= $E ->
+    take_number_token(T, [C|Acc]);
+take_number_token(Rest, Acc) ->
+    {Acc, Rest}.
+
+list_to_integer_safe(Str) ->
+    try list_to_integer(Str) catch _:_ -> 0 end.
+
+list_to_float_safe(Str) ->
+    try list_to_float(Str) catch _:_ -> 0.0 end.
+
+%% Query string parsing (OTP 22 compatible)
+parse_querystring(QS) when is_list(QS) ->
+    Parts = string:tokens(QS, "&"),
+    Pairs = [parse_qs_kv(P) || P <- Parts, P =/= ""],
+    maps:from_list(Pairs);
+parse_querystring(_) ->
+    #{}.
+
+parse_qs_kv(S) ->
+    case string:tokens(S, "=") of
+        [K,V|_] -> {to_bin(url_decode(K)), to_bin(url_decode(V))};
+        [K] -> {to_bin(url_decode(K)), <<>>};
+        _ -> {<<>>, <<>>}
+    end.
+
+url_decode(S) when is_list(S) ->
+    url_decode_list(S, []).
+
+url_decode_list([], Acc) ->
+    lists:reverse(Acc);
+url_decode_list([$+|T], Acc) ->
+    url_decode_list(T, [$\s|Acc]);
+url_decode_list([$%,A,B|T], Acc) ->
+    V = (hex_to_int(A) bsl 4) bor hex_to_int(B),
+    url_decode_list(T, [V|Acc]);
+url_decode_list([C|T], Acc) ->
+    url_decode_list(T, [C|Acc]).
 
