@@ -655,7 +655,7 @@ class Handler(BaseHTTPRequestHandler):
                     save_set_meta(set_id, meta)
                     return self._ok(found)
 
-            # NOTE: areas (områden) är borttagna i denna MVP.
+            # NOTE: areas (områden) är borttagna i denna variant.
 
             return self._err(404, "not_found", {"path": path})
         except Exception as e:

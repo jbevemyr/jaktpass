@@ -1,4 +1,4 @@
-# jaktpass (MVP)
+# Jaktpass
 
 En liten Seterra-liknande webapp för att träna på var jaktpass ligger på en uppladdad kartbild.
 
@@ -37,7 +37,7 @@ priv/data/
 - `image`: `{filename, width, height, uploadedAt}` (om uppladdad)
 - `stands`: `[{id, name, note?, x, y, createdAt, updatedAt}]`
   
-**OBS:** Områden (areas) är borttagna i denna variant av MVP.
+**OBS:** Områden (areas) är borttagna i denna variant.
 
 ## Yaws-konfiguration (snippet)
 
@@ -160,7 +160,7 @@ curl -i \
 ### Skapa område (admin)
 
 ```bash
-echo "Områden (areas) är borttagna i denna MVP."
+echo "Områden (areas) är borttagna i denna variant."
 ```
 
 ### Hämta quiz-pack (publikt)

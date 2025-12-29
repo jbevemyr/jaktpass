@@ -1,4 +1,4 @@
-/* Minimal SPA för MVP. Inga externa deps. */
+/* Minimal SPA. Inga externa deps. */
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, attrs = {}, children = []) => {
@@ -774,7 +774,7 @@ function renderQuizPack(meta, pack) {
 
       // Felklick: visa temporär label med vad man klickade på (fadar ut inom 5s)
       state.quiz.attempts += 1;
-      // Seterra-liknande: varje felklick är ett misstag (men vi cappar per fråga till 3 i MVP)
+      // Seterra-liknande: varje felklick är ett misstag (men vi cappar per fråga till 3)
       const qid = wantId;
       const prev = state.quiz.mistakesByQuestion[qid] || 0;
       if (prev < 3) {
