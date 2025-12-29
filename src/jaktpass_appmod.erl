@@ -7,7 +7,11 @@
 %%%-------------------------------------------------------------------
 
 -module(jaktpass_appmod).
--export([out/1]).
+-export([out/1, start/0, stop/0]).
+
+%% Vissa Yaws-versioner anropar Appmod:start/0 vid load.
+start() -> ok.
+stop() -> ok.
 
 %% Yaws records (#arg, #http_request, #headers, ...)
 %% OTP 22: använd lokal header (incheckad i repo) istället för include_lib(...)
