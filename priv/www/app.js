@@ -377,7 +377,6 @@ function getOrCreateMapPreviewModal() {
   map.id = "map-preview-map";
   map.className = "map";
   map.style.marginTop = "10px";
-  map.style.minHeight = "70vh";
 
   card.id = "map-preview-card";
   card.appendChild(title);

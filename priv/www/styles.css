@@ -234,8 +234,9 @@ button.danger { background: var(--danger); color: #0b0d10; }
   max-width: 980px;
   /* Gör modalen högre och undvik att innehåll klipps på kortare skärmar */
   margin: 4vh auto 0;
-  max-height: 92vh;
-  overflow: auto;
+  /* Låt kortet växa med kartan; själva modalen får scroll */
+  max-height: none;
+  overflow: visible;
 }
 .modal-card:fullscreen {
   width: 100%;
@@ -247,6 +248,14 @@ button.danger { background: var(--danger); color: #0b0d10; }
 }
 .modal-card:fullscreen .map {
   min-height: calc(100vh - 140px);
+}
+
+/* Kart-modal: scrolla hela modalen så kartan inte klipps i underkant */
+#map-preview-modal {
+  overflow: auto;
+}
+#map-preview-modal .modal-backdrop {
+  position: fixed;
 }
 
 /* Quiz startskärm */
