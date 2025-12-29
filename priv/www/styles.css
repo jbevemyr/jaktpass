@@ -99,6 +99,12 @@ button.danger { background: var(--danger); color: #0b0d10; }
   padding: 8px 10px;
   color: var(--fg);
 }
+.quiz-question {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  align-self: center;
+}
 
 .map {
   position: relative;
