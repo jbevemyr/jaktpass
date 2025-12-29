@@ -105,6 +105,16 @@ button.danger { background: var(--danger); color: #0b0d10; }
   letter-spacing: 0.2px;
   align-self: center;
 }
+.quiz-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: center;
+}
+.quiz-instr {
+  color: var(--muted);
+  font-size: 12px;
+}
 
 .map {
   position: relative;
