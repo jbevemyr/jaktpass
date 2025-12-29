@@ -1,5 +1,6 @@
 # Runtime data (persistens)
 data/
+priv/data/
 
 # Erlang build artifacts / crash dumps
 *.beam

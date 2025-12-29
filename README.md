@@ -4,19 +4,19 @@ En liten Seterra-liknande webapp för att träna på var jaktpass ligger på en 
 
 - **Backend**: Yaws + Erlang, en enda appmod: `jaktpass_appmod.erl` (routing under `/api`)
 - **Frontend**: minimal SPA som statiska filer i `priv/www` (serveras av Yaws docroot)
-- **Persistens**: filer på disk (JSON + bildfil) under `JAKTPASS_DATA_DIR` (default `./data`)
+- **Persistens**: filer på disk (JSON + bildfil) under `JAKTPASS_DATA_DIR` (default `./priv/data`)
 - **Admin**: Basic Auth för alla endpoints under `/api/admin/*`
 
 ## Miljövariabler
 
-- **`JAKTPASS_DATA_DIR`**: datakatalog (default `./data`)
+- **`JAKTPASS_DATA_DIR`**: datakatalog (default `./priv/data`)
 - **`JAKTPASS_ADMIN_USER`**: admin username (default `admin`)
 - **`JAKTPASS_ADMIN_PASS`**: admin password (default `admin`)
 
 Exempel:
 
 ```bash
-export JAKTPASS_DATA_DIR=./data
+export JAKTPASS_DATA_DIR=./priv/data
 export JAKTPASS_ADMIN_USER=admin
 export JAKTPASS_ADMIN_PASS=admin
 ```
@@ -24,7 +24,7 @@ export JAKTPASS_ADMIN_PASS=admin
 ## Filstruktur på disk
 
 ```
-data/
+priv/data/
   sets/
     <setId>/
       meta.json
@@ -71,7 +71,7 @@ python3 pyserver/jaktpass_pyserver.py --port 8000
 
 Den använder samma env vars som Yaws:
 
-- `JAKTPASS_DATA_DIR` (default `./data`)
+- `JAKTPASS_DATA_DIR` (default `./priv/data`)
 - `JAKTPASS_ADMIN_USER` / `JAKTPASS_ADMIN_PASS` (default `admin`/`admin`)
 
 ## API-exempel med curl

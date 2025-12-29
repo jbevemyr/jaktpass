@@ -20,7 +20,7 @@
 out(A) ->
     try
         Method = ((A#arg.req)#http_request.method),
-        Path0  = yaws_api:request_path(A),
+        Path0  = request_path(A),
         Path   = strip_api_prefix(Path0),
         Segs   = split_path(Path),
         dispatch(Method, Segs, A)
@@ -392,7 +392,7 @@ find_header_lower(NameLower, H) ->
 %%====================================================================
 
 data_dir() ->
-    getenv_default("JAKTPASS_DATA_DIR", "./data").
+    getenv_default("JAKTPASS_DATA_DIR", "./priv/data").
 
 sets_dir() ->
     filename:join([data_dir(), "sets"]).
@@ -760,13 +760,17 @@ recv_body_bin(A) ->
 validate_nonempty_string(undefined) -> {error, <<"missing">>};
 validate_nonempty_string(null) -> {error, <<"missing">>};
 validate_nonempty_string(B) when is_binary(B) ->
-    case binary:trim(B) of
+    case bin_trim(B) of
         <<>> -> {error, <<"empty">>};
         T -> {ok, T}
     end;
 validate_nonempty_string(L) when is_list(L) ->
     validate_nonempty_string(list_to_binary(L));
 validate_nonempty_string(_) -> {error, <<"invalid_type">>}.
+
+bin_trim(B) when is_binary(B) ->
+    %% OTP 22 saknar binary:trim/1, så vi gör en enkel whitespace-trim själva.
+    list_to_binary(string:trim(binary_to_list(B))).
 
 validate_norm_coord(V) when is_integer(V); is_float(V) ->
     if V >= 0.0, V =< 1.0 -> {ok, V + 0.0}; true -> {error, <<"out_of_range">>} end;
@@ -1088,8 +1092,13 @@ parse_string([$\\, Esc | T], AccRev) ->
             case T of
                 [H1,H2,H3,H4 | T2] ->
                     Code = hex4_to_int(H1,H2,H3,H4),
-                    Bin = unicode:characters_to_binary([Code], utf8),
-                    parse_string(T2, lists:reverse(binary_to_list(Bin), AccRev));
+                    case unicode:characters_to_binary([Code], utf8) of
+                        Bin when is_binary(Bin) ->
+                            parse_string(T2, lists:reverse(binary_to_list(Bin), AccRev));
+                        _ ->
+                            %% Ogiltig unicode-sekvens -> hoppa över tecknet
+                            parse_string(T2, AccRev)
+                    end;
                 _ ->
                     parse_string(T, AccRev)
             end;
@@ -1157,4 +1166,19 @@ url_decode_list([$%,A,B|T], Acc) ->
     url_decode_list(T, [V|Acc]);
 url_decode_list([C|T], Acc) ->
     url_decode_list(T, [C|Acc]).
+
+request_path(A) ->
+    %% Kompatibilitet: vissa Yaws-versioner saknar yaws_api:request_path/1.
+    case erlang:function_exported(yaws_api, request_path, 1) of
+        true ->
+            yaws_api:request_path(A);
+        false ->
+            %% #arg.server_path är normaliserad path (utan querystring)
+            case A#arg.server_path of
+                undefined -> "/";
+                B when is_binary(B) -> B;
+                L when is_list(L) -> L;
+                _ -> "/"
+            end
+    end.
 

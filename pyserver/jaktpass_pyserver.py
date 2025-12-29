@@ -42,7 +42,7 @@ def getenv_default(key: str, default: str) -> str:
 
 
 def data_dir() -> Path:
-    return Path(getenv_default("JAKTPASS_DATA_DIR", "./data")).resolve()
+    return Path(getenv_default("JAKTPASS_DATA_DIR", "./priv/data")).resolve()
 
 
 def sets_dir() -> Path:
