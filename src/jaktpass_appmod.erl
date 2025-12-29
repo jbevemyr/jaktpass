@@ -40,11 +40,11 @@ out(A) ->
 dispatch('GET', ["sets"], _A) ->
     handle_get_sets();
 dispatch('GET', ["sets", SetId], _A) ->
-    handle_get_set(SetId);
+    with_valid_set_id(SetId, fun(SId) -> handle_get_set(SId) end);
 dispatch('GET', ["sets", SetId, "quiz"], A) ->
-    handle_get_quiz(SetId, A);
+    with_valid_set_id(SetId, fun(SId) -> handle_get_quiz(SId, A) end);
 dispatch('GET', ["media", "sets", SetId, "image"], _A) ->
-    handle_get_image(SetId);
+    with_valid_set_id(SetId, fun(SId) -> handle_get_image(SId) end);
 
 %% Admin
 dispatch('GET', ["admin", "ping"], A) ->
@@ -52,11 +52,11 @@ dispatch('GET', ["admin", "ping"], A) ->
 dispatch('POST', ["admin", "sets"], A) ->
     with_admin(A, fun() -> handle_post_admin_sets(A) end);
 dispatch('DELETE', ["admin", "sets", SetId], A) ->
-    with_admin(A, fun() -> handle_delete_admin_set(SetId) end);
+    with_admin(A, fun() -> with_valid_set_id(SetId, fun(SId) -> handle_delete_admin_set(SId) end) end);
 dispatch('POST', ["admin", "sets", SetId, "image"], A) ->
-    with_admin(A, fun() -> handle_post_admin_set_image(SetId, A) end);
+    with_admin(A, fun() -> with_valid_set_id(SetId, fun(SId) -> handle_post_admin_set_image(SId, A) end) end);
 dispatch('POST', ["admin", "sets", SetId, "stands"], A) ->
-    with_admin(A, fun() -> handle_post_admin_set_stands(SetId, A) end);
+    with_admin(A, fun() -> with_valid_set_id(SetId, fun(SId) -> handle_post_admin_set_stands(SId, A) end) end);
 dispatch('PATCH', ["admin", "stands", StandId], A) ->
     with_admin(A, fun() -> handle_patch_admin_stand(StandId, A) end);
 dispatch('DELETE', ["admin", "stands", StandId], A) ->
@@ -902,6 +902,27 @@ to_bin(A) when is_atom(A) -> atom_to_binary(A, utf8);
 to_bin(I) when is_integer(I) -> integer_to_binary(I);
 to_bin(F) when is_float(F) -> float_to_binary(F, [compact]);
 to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+
+%%====================================================================
+%% Security: validate setId to avoid path traversal (OTP22-safe)
+%%====================================================================
+
+with_valid_set_id(SetId0, Fun) ->
+    SetId = case SetId0 of
+                B when is_binary(B) -> binary_to_list(B);
+                L when is_list(L) -> L
+            end,
+    case is_valid_uuid(SetId) of
+        true -> Fun(SetId);
+        false -> json_error(400, <<"invalid_set_id">>, #{<<"setId">> => to_bin(SetId)})
+    end.
+
+is_valid_uuid(S) when is_list(S) ->
+    %% Enforce UUID v4-ish shape to prevent ".." and other traversal tokens.
+    case re:run(S, "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", [{capture, none}]) of
+        match -> true;
+        nomatch -> false
+    end.
 
 %%====================================================================
 %% Response helpers

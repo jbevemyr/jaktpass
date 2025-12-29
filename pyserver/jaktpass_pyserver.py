@@ -226,6 +226,13 @@ def image_ext(filename: str) -> Optional[str]:
     return None
 
 
+_SETID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def validate_set_id(set_id: str) -> bool:
+    return bool(_SETID_RE.match(set_id or ""))
+
+
 _SET_LOCKS: Dict[str, threading.Lock] = {}
 _SET_LOCKS_GUARD = threading.Lock()
 
@@ -451,6 +458,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if method == "GET" and len(segs) == 2 and segs[0] == "sets":
                 set_id = unquote(segs[1])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 try:
                     meta = load_set_meta(set_id)
                 except FileNotFoundError:
@@ -464,6 +473,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if method == "GET" and len(segs) == 3 and segs[0] == "sets" and segs[2] == "quiz":
                 set_id = unquote(segs[1])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 qs = parse_qs(u.query or "")
                 mode = (qs.get("mode") or ["rand10"])[0]
                 try:
@@ -488,6 +499,8 @@ class Handler(BaseHTTPRequestHandler):
                 if len(segs) != 4:
                     return self._err(404, "not_found", {})
                 set_id = unquote(segs[2])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 try:
                     meta = load_set_meta(set_id)
                 except FileNotFoundError:
@@ -533,6 +546,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if method == "DELETE" and len(segs) == 3 and segs[:2] == ["admin", "sets"]:
                 set_id = unquote(segs[2])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 with with_set_lock(set_id):
                     d = set_dir(set_id)
                     if not d.exists() or not d.is_dir():
@@ -545,6 +560,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if method == "POST" and len(segs) == 4 and segs[:2] == ["admin", "sets"] and segs[3] == "image":
                 set_id = unquote(segs[2])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 with with_set_lock(set_id):
                     try:
                         meta = load_set_meta(set_id)
@@ -573,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if method == "POST" and len(segs) == 4 and segs[:2] == ["admin", "sets"] and segs[3] == "stands":
                 set_id = unquote(segs[2])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
                 body = self._read_json_body()
                 if body is None:
                     return self._err(400, "invalid_json", {})
