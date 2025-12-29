@@ -789,7 +789,8 @@ function renderQuizPack(meta, pack) {
   }));
 
   renderMap($("#quiz-map"), meta, { dots, labels });
-  $("#quiz-debug").textContent = fmt(pack);
+  // Ingen debug-json i quiz-läget (håller UI:t rent)
+  $("#quiz-debug").textContent = "";
 }
 
 function showTempLabel(standId, x, y) {
