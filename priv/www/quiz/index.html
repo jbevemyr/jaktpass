@@ -13,22 +13,13 @@
         <nav class="tabs">
           <button id="tab-admin" class="tab">Admin</button>
           <button id="tab-quiz" class="tab">Quiz</button>
+          <button id="logout-btn" class="tab" style="display:none">Logga ut</button>
         </nav>
       </header>
 
       <main>
         <section id="view-admin" class="view">
           <h2>Admin</h2>
-
-          <div class="card">
-            <h3>Basic Auth</h3>
-            <div class="row">
-              <label>Username <input id="admin-user" type="text" autocomplete="username" /></label>
-              <label>Password <input id="admin-pass" type="password" autocomplete="current-password" /></label>
-              <button id="save-creds">Spara</button>
-            </div>
-            <div class="hint">Sparas i localStorage. Skickas som <code>Authorization: Basic ...</code> på /api/admin/*</div>
-          </div>
 
           <div id="admin-only">
           <div class="card">
@@ -42,6 +33,7 @@
                 <select id="admin-set-select"></select>
               </label>
               <button id="refresh-admin">Uppdatera</button>
+              <button id="delete-set" class="danger">Radera set</button>
             </div>
             <pre id="admin-set-meta" class="pre"></pre>
           </div>
@@ -88,39 +80,68 @@
 
         <section id="view-quiz" class="view">
           <h2>Quiz</h2>
-          <div class="card">
+          <div id="quiz-home" class="card">
             <div class="row">
-              <label>Set
-                <select id="quiz-set-select"></select>
-              </label>
-              <label>Typ
-                <select id="quiz-mode">
-                  <option value="rand10" selected>10 slumpmässiga</option>
-                  <option value="randHalf">Hälften slumpmässiga</option>
-                  <option value="all">Alla pass</option>
-                </select>
-              </label>
-              <button id="start-quiz">Starta</button>
+              <div class="pill">Quiz-typ:</div>
+              <div class="segmented" role="group" aria-label="Quiz-typ">
+                <button id="mode-rand10" class="seg-btn">10</button>
+                <button id="mode-randHalf" class="seg-btn">1/2</button>
+                <button id="mode-all" class="seg-btn">Alla</button>
+              </div>
             </div>
-            <div class="hint">Välj quiz-typ: 10 slump, halva slump, eller alla pass.</div>
+            <div class="hint">Välj set och tryck Start.</div>
+            <div id="quiz-set-list" class="set-list"></div>
           </div>
 
-          <div class="card">
-            <div class="row">
-              <div class="pill">Fråga: <span id="quiz-question">-</span></div>
-              <div class="pill">Progress: <span id="quiz-progress">0/0</span></div>
-              <div class="pill">Score: <span id="quiz-score">100%</span></div>
+          <div id="quiz-play" style="display:none">
+            <div class="card">
+              <div class="row">
+                <button id="quiz-back" class="secondary">Till listan</button>
+                <div class="pill">Fråga: <span id="quiz-question">-</span></div>
+                <div class="pill">Progress: <span id="quiz-progress">0/0</span></div>
+                <div class="pill">Score: <span id="quiz-score">100%</span></div>
+              </div>
             </div>
-          </div>
 
-          <div class="card">
-            <h3>Karta</h3>
-            <div id="quiz-map" class="map"></div>
-          </div>
+            <div class="card">
+              <h3>Karta</h3>
+              <div id="quiz-map" class="map"></div>
+            </div>
 
-          <pre id="quiz-debug" class="pre"></pre>
+            <pre id="quiz-debug" class="pre"></pre>
+          </div>
         </section>
       </main>
+    </div>
+
+    <!-- Login-modal för /admin -->
+    <div id="login-modal" class="modal" style="display:none" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <h3 id="login-title">Logga in</h3>
+        <div class="hint">Admin kräver Basic Auth. Ange username/password och klicka Logga in.</div>
+        <div class="row" style="margin-top:10px">
+          <label>Username <input id="login-user" type="text" autocomplete="username" /></label>
+          <label>Password <input id="login-pass" type="password" autocomplete="current-password" /></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="login-submit">Logga in</button>
+          <button id="login-cancel" class="secondary">Avbryt</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slut-modal för quiz -->
+    <div id="quiz-finish-modal" class="modal" style="display:none" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="finish-title">
+        <h3 id="finish-title">Klart!</h3>
+        <div class="hint">Din score: <b><span id="finish-score">0%</span></b></div>
+        <div class="row" style="margin-top:10px">
+          <button id="finish-restart">Starta om</button>
+          <button id="finish-to-list" class="secondary">Till listan</button>
+        </div>
+      </div>
     </div>
 
     <script src="/app.js"></script>

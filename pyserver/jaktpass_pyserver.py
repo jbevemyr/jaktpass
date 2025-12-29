@@ -22,6 +22,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import threading
 import uuid
 from dataclasses import dataclass
@@ -529,6 +530,18 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 save_set_meta(set_id, meta)
                 return self._ok({"id": set_id}, code=201)
+
+            if method == "DELETE" and len(segs) == 3 and segs[:2] == ["admin", "sets"]:
+                set_id = unquote(segs[2])
+                with with_set_lock(set_id):
+                    d = set_dir(set_id)
+                    if not d.exists() or not d.is_dir():
+                        return self._err(404, "set_not_found", {"setId": set_id})
+                    try:
+                        shutil.rmtree(d)
+                    except Exception as e:
+                        return self._err(500, "failed_to_delete_set", {"error": str(e)})
+                return self._ok({"deleted": True, "setId": set_id})
 
             if method == "POST" and len(segs) == 4 and segs[:2] == ["admin", "sets"] and segs[3] == "image":
                 set_id = unquote(segs[2])

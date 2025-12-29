@@ -36,7 +36,8 @@ data/
 - `set`: `{id, name, createdAt}`
 - `image`: `{filename, width, height, uploadedAt}` (om uppladdad)
 - `stands`: `[{id, name, note?, x, y, createdAt, updatedAt}]`
-- `areas`: `[{id, name, polygon:[{x,y}...], createdAt, updatedAt}]`
+  
+**OBS:** Områden (areas) är borttagna i denna variant av MVP.
 
 ## Yaws-konfiguration (snippet)
 
@@ -88,6 +89,15 @@ curl -i \
   -H "Content-Type: application/json" \
   -d '{"name":"Mitt set"}' \
   http://localhost:8080/api/admin/sets
+```
+
+### Radera set (admin)
+
+```bash
+curl -i \
+  -u "$JAKTPASS_ADMIN_USER:$JAKTPASS_ADMIN_PASS" \
+  -X DELETE \
+  http://localhost:8080/api/admin/sets/<setId>
 ```
 
 ### Lista set (publikt)
@@ -150,38 +160,15 @@ curl -i \
 ### Skapa område (admin)
 
 ```bash
-curl -i \
-  -u "$JAKTPASS_ADMIN_USER:$JAKTPASS_ADMIN_PASS" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Område A","polygon":[{"x":0.1,"y":0.1},{"x":0.8,"y":0.1},{"x":0.8,"y":0.8},{"x":0.1,"y":0.8}]}' \
-  http://localhost:8080/api/admin/sets/<setId>/areas
-```
-
-### Ändra område (admin)
-
-```bash
-curl -i \
-  -u "$JAKTPASS_ADMIN_USER:$JAKTPASS_ADMIN_PASS" \
-  -X PATCH \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Område A (uppdaterat)"}' \
-  http://localhost:8080/api/admin/areas/<areaId>
-```
-
-### Radera område (admin)
-
-```bash
-curl -i \
-  -u "$JAKTPASS_ADMIN_USER:$JAKTPASS_ADMIN_PASS" \
-  -X DELETE \
-  http://localhost:8080/api/admin/areas/<areaId>
+echo "Områden (areas) är borttagna i denna MVP."
 ```
 
 ### Hämta quiz-pack (publikt)
 
 ```bash
-curl -s "http://localhost:8080/api/sets/<setId>/quiz?count=10&mode=rand"
-curl -s "http://localhost:8080/api/sets/<setId>/quiz?areaId=<areaId>&count=10&mode=rand"
+curl -s "http://localhost:8080/api/sets/<setId>/quiz?mode=rand10"
+curl -s "http://localhost:8080/api/sets/<setId>/quiz?mode=randHalf"
+curl -s "http://localhost:8080/api/sets/<setId>/quiz?mode=all"
 ```
 
 ## Frontend

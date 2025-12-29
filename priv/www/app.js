@@ -44,8 +44,10 @@ async function api(path, { method = "GET", jsonBody, admin = false, multipart } 
   const body = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
   if (!res.ok) {
     // Om admin-auth fallerar: växla UI tillbaka till login-rutan
-    if (res.status === 401) {
+    // (men bara för /api/admin/* så vi inte råkar gömma admin p.g.a. andra 401:or).
+    if (res.status === 401 && String(path).startsWith("/api/admin/")) {
       setAdminAuthed(false);
+      showToast("Inte inloggad (fel användarnamn/lösenord).");
     }
     const err = body && body.error ? body.error : `HTTP ${res.status}`;
     const details = body && body.details ? body.details : body;
@@ -74,11 +76,27 @@ function navigateTo(view) {
   if (location.pathname !== target) history.pushState({ view }, "", target);
   showView(view);
   if (view === "admin") checkAdminAuthAndGate();
+  else showLoginModal(false);
 }
 
 function setAdminAuthed(ok) {
   const adminOnly = document.querySelector("#admin-only");
   if (adminOnly) adminOnly.style.display = ok ? "" : "none";
+  const logout = document.querySelector("#logout-btn");
+  if (logout) logout.style.display = ok ? "" : "none";
+  if (viewFromPath(location.pathname) === "admin") {
+    showLoginModal(!ok);
+  }
+}
+
+function showLoginModal(show) {
+  const m = document.querySelector("#login-modal");
+  if (!m) return;
+  m.style.display = show ? "" : "none";
+  m.setAttribute("aria-hidden", show ? "false" : "true");
+  if (show) {
+    try { $("#login-user")?.focus(); } catch {}
+  }
 }
 
 async function checkAdminAuthAndGate() {
@@ -86,7 +104,10 @@ async function checkAdminAuthAndGate() {
   setAdminAuthed(false);
   const { user, pass } = getCreds();
   if (!user || !pass) {
-    try { $("#admin-user")?.focus(); } catch {}
+    const u = document.querySelector("#login-user");
+    const p = document.querySelector("#login-pass");
+    if (u) u.value = user || "";
+    if (p) p.value = pass || "";
     return;
   }
   try {
@@ -94,7 +115,7 @@ async function checkAdminAuthAndGate() {
     setAdminAuthed(true);
   } catch {
     setAdminAuthed(false);
-    try { $("#admin-user")?.focus(); } catch {}
+    showToast("Logga in för att använda admin.");
   }
 }
 
@@ -117,6 +138,8 @@ let state = {
     meta: null,
     revealActive: false,
     revealId: null,
+    mode: "rand10",
+    selectedSetId: null,
   },
 };
 
@@ -230,22 +253,396 @@ async function refreshSets() {
   const r = await api("/api/sets");
   state.sets = r.data || [];
   const selA = $("#admin-set-select");
-  const selQ = $("#quiz-set-select");
   selA.innerHTML = "";
-  selQ.innerHTML = "";
   state.sets.forEach((s) => {
     selA.appendChild(el("option", { value: s.id, text: `${s.name} (${s.id})` }));
-    selQ.appendChild(el("option", { value: s.id, text: `${s.name}` }));
   });
   if (!state.adminSetId && state.sets[0]) state.adminSetId = state.sets[0].id;
   if (state.adminSetId) selA.value = state.adminSetId;
-  if (state.sets[0]) selQ.value = state.sets[0].id;
+  renderQuizHome();
 }
 
 function selectedSetId(kind) {
   if (kind === "admin") return $("#admin-set-select").value || null;
-  if (kind === "quiz") return $("#quiz-set-select").value || null;
   return null;
+}
+
+function setQuizMode(mode) {
+  state.quiz.mode = mode;
+  $("#mode-rand10")?.classList.toggle("active", mode === "rand10");
+  $("#mode-randHalf")?.classList.toggle("active", mode === "randHalf");
+  $("#mode-all")?.classList.toggle("active", mode === "all");
+}
+
+function showQuizHome() {
+  $("#quiz-home") && ($("#quiz-home").style.display = "");
+  $("#quiz-play") && ($("#quiz-play").style.display = "none");
+}
+
+function showQuizPlay() {
+  $("#quiz-home") && ($("#quiz-home").style.display = "none");
+  $("#quiz-play") && ($("#quiz-play").style.display = "");
+}
+
+function renderQuizHome() {
+  const root = $("#quiz-set-list");
+  if (!root) return;
+  root.innerHTML = "";
+  if (!state.sets.length) {
+    root.appendChild(el("div", { class: "hint", text: "Inga set ännu. Skapa ett i Admin." }));
+    return;
+  }
+  state.sets.forEach((s) => {
+    const left = el("div", {}, [
+      el("div", { class: "title", text: s.name }),
+      el("div", { class: "meta", text: s.hasImage ? "Har bild" : "Ingen bild än" }),
+    ]);
+    const btnStart = el("button", { class: "play-btn", text: "Start" });
+    btnStart.addEventListener("click", () => startQuiz(s.id));
+    const btnMap = el("button", { class: "secondary play-btn", text: "Karta" });
+    btnMap.addEventListener("click", () => showMapPreview(s.id));
+    const btnPdf = el("button", { class: "secondary play-btn", text: "PDF" });
+    btnPdf.addEventListener("click", () => generatePdfForSet(s.id));
+    const right = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnMap, btnStart]);
+    const right2 = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnPdf, btnMap, btnStart]);
+    root.appendChild(el("div", { class: "set-row" }, [left, right2]));
+  });
+}
+
+function getOrCreateMapPreviewModal() {
+  let m = document.querySelector("#map-preview-modal");
+  if (m) return m;
+
+  m = document.createElement("div");
+  m.id = "map-preview-modal";
+  m.className = "modal";
+  m.style.display = "none";
+  m.setAttribute("aria-hidden", "true");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.addEventListener("click", () => showMapPreviewModal(false));
+
+  const card = document.createElement("div");
+  card.className = "modal-card wide";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.id = "map-preview-title";
+  title.textContent = "Karta";
+
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.id = "map-preview-hint";
+
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.marginTop = "10px";
+
+  const fsBtn = document.createElement("button");
+  fsBtn.className = "secondary";
+  fsBtn.id = "map-preview-fullscreen";
+  fsBtn.textContent = "Fullskärm";
+  fsBtn.addEventListener("click", async () => {
+    try {
+      const cardEl = document.querySelector("#map-preview-card");
+      if (!document.fullscreenElement) {
+        await cardEl?.requestFullscreen?.();
+      } else {
+        await document.exitFullscreen?.();
+      }
+    } catch (e) {
+      showToast("Fullskärm stöds inte här.");
+    }
+  });
+
+  const close = document.createElement("button");
+  close.className = "secondary";
+  close.textContent = "Stäng";
+  close.addEventListener("click", () => showMapPreviewModal(false));
+
+  row.appendChild(fsBtn);
+  row.appendChild(close);
+
+  const map = document.createElement("div");
+  map.id = "map-preview-map";
+  map.className = "map";
+  map.style.marginTop = "10px";
+  map.style.minHeight = "70vh";
+
+  card.id = "map-preview-card";
+  card.appendChild(title);
+  card.appendChild(hint);
+  card.appendChild(row);
+  card.appendChild(map);
+
+  m.appendChild(backdrop);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  return m;
+}
+
+function showMapPreviewModal(show) {
+  const m = getOrCreateMapPreviewModal();
+  if (!show) {
+    // Om modalen stängs när den är i fullskärm: lämna fullskärm så vi inte "fastnar" där.
+    try {
+      if (document.fullscreenElement) document.exitFullscreen?.();
+    } catch {}
+  }
+  m.style.display = show ? "" : "none";
+  m.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
+async function showMapPreview(setId) {
+  showMapPreviewModal(true);
+  const meta = await loadSetMeta(setId);
+  const title = document.querySelector("#map-preview-title");
+  const hint = document.querySelector("#map-preview-hint");
+  const mapEl = document.querySelector("#map-preview-map");
+  if (title) title.textContent = meta?.set?.name ? `Karta: ${meta.set.name}` : "Karta";
+
+  if (!meta?.imageUrl) {
+    if (hint) hint.textContent = "Ingen bild uppladdad för detta set.";
+    if (mapEl) mapEl.innerHTML = "";
+    return;
+  }
+  if (hint) hint.textContent = "Alla pass (med namn).";
+
+  const stands = meta.stands || [];
+  const dots = stands.map((s) => ({ x: s.x, y: s.y, className: "quiz" }));
+  const labels = stands.map((s, i) => ({
+    x: s.x,
+    y: s.y,
+    text: displayStandName(s.name || ""),
+    className: "small",
+  }));
+
+  renderMap(mapEl, meta, { dots, labels });
+}
+
+function sanitizeFilename(s) {
+  return String(s || "set")
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9\-_]+/g, "")
+    .slice(0, 60) || "set";
+}
+
+function displayStandName(name) {
+  // Om namnet börjar med "Pass" / "pass" så tar vi bort prefixet i presentationen
+  // Ex: "Pass 12" -> "12", "pass 3 Norra" -> "3 Norra"
+  const s = String(name || "").trim();
+  return s.replace(/^pass\b\s*/i, "").trim();
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function canvasToJpegBytes(canvas) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  const ab = await blob.arrayBuffer();
+  return new Uint8Array(ab);
+}
+
+function pdfEscapeText(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function buildPdfWithJpegAndText({ jpegBytes, imgW, imgH, lines }) {
+  // Minimal PDF generator: 2 pages (image + list). Uses DCTDecode for JPEG and Helvetica for text.
+  const parts = [];
+  const offsets = [0]; // dummy for 1-based obj indexing
+  const push = (s) => parts.push(typeof s === "string" ? new TextEncoder().encode(s) : s);
+  const join = () => {
+    const len = parts.reduce((a, b) => a + b.length, 0);
+    const out = new Uint8Array(len);
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+  const markOffset = () => {
+    const cur = parts.reduce((a, b) => a + b.length, 0);
+    offsets.push(cur);
+  };
+
+  const pageW = 595; // A4 portrait points
+  const pageH = 842;
+  const margin = 36;
+  const maxW = pageW - margin * 2;
+  const maxH = pageH - margin * 2;
+  const scale = Math.min(maxW / imgW, maxH / imgH);
+  const drawW = imgW * scale;
+  const drawH = imgH * scale;
+  const x0 = (pageW - drawW) / 2;
+  const y0 = (pageH - drawH) / 2;
+
+  const imgContent = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x0.toFixed(2)} ${y0.toFixed(2)} cm\n/Im0 Do\nQ\n`;
+  const imgContentBytes = new TextEncoder().encode(imgContent);
+
+  const fontSize = 12;
+  const lineHeight = 14;
+  let textY = pageH - margin - fontSize;
+  const textLines = [];
+  textLines.push("BT");
+  textLines.push(`/F1 ${fontSize} Tf`);
+  textLines.push(`${margin} ${textY} Td`);
+  for (let i = 0; i < lines.length; i++) {
+    const t = pdfEscapeText(lines[i]);
+    if (i > 0) textLines.push(`0 -${lineHeight} Td`);
+    textLines.push(`(${t}) Tj`);
+  }
+  textLines.push("ET");
+  const textContentBytes = new TextEncoder().encode(textLines.join("\n") + "\n");
+
+  push("%PDF-1.4\n%\xFF\xFF\xFF\xFF\n");
+
+  // 1: catalog
+  markOffset(); push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+  // 2: pages
+  markOffset(); push("2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n");
+  // 3: page1 (image)
+  markOffset();
+  push(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
+  // 4: page2 (text)
+  markOffset();
+  push(`4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 7 0 R >> >> /Contents 8 0 R >>\nendobj\n`);
+  // 5: image content stream
+  markOffset();
+  push(`5 0 obj\n<< /Length ${imgContentBytes.length} >>\nstream\n`);
+  push(imgContentBytes);
+  push("endstream\nendobj\n");
+  // 6: image xobject (jpeg)
+  markOffset();
+  push(`6 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`);
+  push(jpegBytes);
+  push("\nendstream\nendobj\n");
+  // 7: font
+  markOffset();
+  push("7 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+  // 8: text content stream
+  markOffset();
+  push(`8 0 obj\n<< /Length ${textContentBytes.length} >>\nstream\n`);
+  push(textContentBytes);
+  push("endstream\nendobj\n");
+
+  const xrefStart = parts.reduce((a, b) => a + b.length, 0);
+  const objCount = offsets.length - 1;
+  push("xref\n");
+  push(`0 ${objCount + 1}\n`);
+  push("0000000000 65535 f \n");
+  for (let i = 1; i <= objCount; i++) {
+    const off = offsets[i].toString().padStart(10, "0");
+    push(`${off} 00000 n \n`);
+  }
+  push("trailer\n");
+  push(`<< /Size ${objCount + 1} /Root 1 0 R >>\n`);
+  push("startxref\n");
+  push(`${xrefStart}\n`);
+  push("%%EOF\n");
+  return join();
+}
+
+async function generatePdfForSet(setId) {
+  try {
+    showToast("Skapar PDF…", 1200);
+    const meta = await loadSetMeta(setId);
+    if (!meta?.imageUrl) {
+      showToast("Ingen bild för detta set.");
+      return;
+    }
+    const stands = meta.stands || [];
+    if (!stands.length) {
+      showToast("Inga pass i detta set.");
+      return;
+    }
+
+    // Rendera karta + passnummer till canvas (och exportera som JPEG för enkel PDF-embed).
+    const img = new Image();
+    img.src = meta.imageUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    const targetW = Math.min(1600, Math.max(900, img.naturalWidth || 1200));
+    const scale = targetW / (img.naturalWidth || targetW);
+    const targetH = Math.round((img.naturalHeight || 800) * scale);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    // Dots + labels
+    ctx.font = "bold 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial";
+    ctx.textBaseline = "top";
+
+    const truncateText = (text, maxWidth) => {
+      const t = String(text || "");
+      if (!t) return "";
+      if (ctx.measureText(t).width <= maxWidth) return t;
+      const ell = "…";
+      let lo = 0, hi = t.length;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const cand = t.slice(0, mid) + ell;
+        if (ctx.measureText(cand).width <= maxWidth) lo = mid + 1;
+        else hi = mid;
+      }
+      return t.slice(0, Math.max(0, lo - 1)) + ell;
+    };
+
+    for (let i = 0; i < stands.length; i++) {
+      const s = stands[i];
+      const x = Math.round(s.x * targetW);
+      const y = Math.round(s.y * targetH);
+      // dot
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // label bubble
+      const txt = String(displayStandName(s.name || ""));
+      const pad = 4;
+      const maxLabelW = Math.min(320, Math.max(140, targetW * 0.25));
+      const txt2 = truncateText(txt, maxLabelW);
+      const tw = ctx.measureText(txt2).width;
+      const bx = x + 10;
+      const by = y - 10;
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.fillRect(bx, by, tw + pad * 2, 22);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(txt2, bx + pad, by + 2);
+    }
+
+    const jpegBytes = await canvasToJpegBytes(canvas);
+    const lines = stands
+      .map((s) => displayStandName(s.name || ""))
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const pdfBytes = buildPdfWithJpegAndText({ jpegBytes, imgW: canvas.width, imgH: canvas.height, lines });
+    const blob = new Blob([pdfBytes], { type: "application/pdf" });
+    const fname = `jaktpass-${sanitizeFilename(meta?.set?.name)}-pass.pdf`;
+    downloadBlob(blob, fname);
+    showToast("PDF klar.");
+  } catch (e) {
+    showToast("Kunde inte skapa PDF.");
+    console.error(e);
+  }
 }
 
 async function loadSetMeta(setId) {
@@ -414,7 +811,7 @@ function advanceQuiz() {
     state.quiz.current = null;
     $("#quiz-question").textContent = "Klart!";
     const pct = updateScore();
-    showToast(`Klart! Du fick ${pct}% score.`);
+    showFinishModal(true, pct);
     return;
   }
   state.quiz.current = q[state.quiz.idx];
@@ -424,9 +821,19 @@ function advanceQuiz() {
   updateScore();
 }
 
-async function startQuiz() {
-  const setId = selectedSetId("quiz");
-  const mode = ($("#quiz-mode")?.value || "rand10");
+function showFinishModal(show, pct) {
+  const m = $("#quiz-finish-modal");
+  if (!m) return;
+  m.style.display = show ? "" : "none";
+  m.setAttribute("aria-hidden", show ? "false" : "true");
+  if (show) {
+    $("#finish-score").textContent = `${pct}%`;
+  }
+}
+
+async function startQuiz(setId) {
+  state.quiz.selectedSetId = setId;
+  const mode = state.quiz.mode || "rand10";
   const qs = new URLSearchParams();
   qs.set("mode", mode);
 
@@ -448,6 +855,8 @@ async function startQuiz() {
   const map = {};
   (meta.stands || []).forEach((s) => { map[s.id] = s.name; });
   state.quiz.standNameById = map;
+  showFinishModal(false, 0);
+  showQuizPlay();
   advanceQuiz();
   renderQuizPack(meta, pack);
 }
@@ -457,13 +866,28 @@ async function startQuiz() {
 $("#tab-admin").addEventListener("click", () => navigateTo("admin"));
 $("#tab-quiz").addEventListener("click", () => navigateTo("quiz"));
 
-$("#save-creds").addEventListener("click", () => {
-  setCreds($("#admin-user").value, $("#admin-pass").value);
-  alert("Sparat.");
-  // Om vi är på admin-vyn: försök auth:a och visa innehåll direkt
-  if ($("#view-admin")?.classList.contains("active")) {
-    checkAdminAuthAndGate();
+$("#login-submit").addEventListener("click", async () => {
+  const user = $("#login-user")?.value || "";
+  const pass = $("#login-pass")?.value || "";
+  setCreds(user, pass);
+  try {
+    await api("/api/admin/ping", { admin: true });
+    setAdminAuthed(true);
+    showToast("Inloggad.");
+  } catch (e) {
+    setAdminAuthed(false);
+    showToast("Fel användarnamn/lösenord.");
   }
+});
+
+$("#login-cancel").addEventListener("click", () => {
+  navigateTo("quiz");
+});
+
+$("#logout-btn").addEventListener("click", () => {
+  setCreds("", "");
+  setAdminAuthed(false);
+  showToast("Utloggad.");
 });
 
 $("#create-set").addEventListener("click", async () => {
@@ -483,6 +907,22 @@ $("#refresh-admin").addEventListener("click", async () => {
   try {
     await refreshSets();
     await refreshAdminMeta();
+  } catch (e) {
+    alert(String(e));
+  }
+});
+
+$("#delete-set").addEventListener("click", async () => {
+  const setId = selectedSetId("admin");
+  if (!setId) return alert("Välj set.");
+  if (!confirm("Radera set? Detta tar bort meta.json och bildfilen på disk.")) return;
+  try {
+    await api(`/api/admin/sets/${encodeURIComponent(setId)}`, { method: "DELETE", admin: true });
+    await refreshSets();
+    state.adminMeta = null;
+    $("#admin-set-meta").textContent = "";
+    await refreshAdminMeta();
+    showToast("Set raderat.");
   } catch (e) {
     alert(String(e));
   }
@@ -561,15 +1001,35 @@ $("#delete-stand").addEventListener("click", async () => {
   }
 });
 
-$("#start-quiz").addEventListener("click", async () => {
-  try { await startQuiz(); } catch (e) { alert(String(e)); }
+$("#mode-rand10")?.addEventListener("click", () => setQuizMode("rand10"));
+$("#mode-randHalf")?.addEventListener("click", () => setQuizMode("randHalf"));
+$("#mode-all")?.addEventListener("click", () => setQuizMode("all"));
+
+$("#quiz-back")?.addEventListener("click", () => {
+  showFinishModal(false, 0);
+  showQuizHome();
+});
+
+$("#finish-to-list")?.addEventListener("click", () => {
+  showFinishModal(false, 0);
+  showQuizHome();
+});
+
+$("#finish-restart")?.addEventListener("click", () => {
+  const sid = state.quiz.selectedSetId;
+  if (!sid) return;
+  showFinishModal(false, 0);
+  startQuiz(sid).catch((e) => alert(String(e)));
 });
 
 // init
 (() => {
   const { user, pass } = getCreds();
-  $("#admin-user").value = user;
-  $("#admin-pass").value = pass;
+  if ($("#login-user")) $("#login-user").value = user;
+  if ($("#login-pass")) $("#login-pass").value = pass;
+  setQuizMode(state.quiz.mode);
+  showQuizHome();
+  showFinishModal(false, 0);
   // Välj vy baserat på URL ("/admin" eller "/quiz")
   navigateTo(viewFromPath(location.pathname));
   window.addEventListener("popstate", () => {

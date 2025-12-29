@@ -51,6 +51,8 @@ dispatch('GET', ["admin", "ping"], A) ->
     with_admin(A, fun() -> json_ok(200, #{<<"authenticated">> => true}) end);
 dispatch('POST', ["admin", "sets"], A) ->
     with_admin(A, fun() -> handle_post_admin_sets(A) end);
+dispatch('DELETE', ["admin", "sets", SetId], A) ->
+    with_admin(A, fun() -> handle_delete_admin_set(SetId) end);
 dispatch('POST', ["admin", "sets", SetId, "image"], A) ->
     with_admin(A, fun() -> handle_post_admin_set_image(SetId, A) end);
 dispatch('POST', ["admin", "sets", SetId, "stands"], A) ->
@@ -179,6 +181,22 @@ handle_post_admin_sets(A) ->
         {error, Msg} ->
             json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
     end.
+
+handle_delete_admin_set(SetId) ->
+    with_set_lock(SetId, fun() ->
+        Dir = set_dir(SetId),
+        case filelib:is_dir(Dir) of
+            false ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            true ->
+                case delete_dir_recursive(Dir) of
+                    ok ->
+                        json_ok(200, #{<<"deleted">> => true, <<"setId">> => to_bin(SetId)});
+                    {error, Reason} ->
+                        json_error(500, <<"failed_to_delete_set">>, #{<<"reason">> => to_bin(Reason)})
+                end
+        end
+    end).
 
 handle_post_admin_set_image(SetId, A) ->
     with_set_lock(SetId, fun() ->
@@ -444,6 +462,33 @@ write_json_atomic(Path, Term) ->
 %% Per-set lock using global:trans (single-node assumption).
 with_set_lock(SetId, Fun) ->
     global:trans({jaktpass_set, SetId}, Fun, [node()], 30000).
+
+delete_dir_recursive(Dir) ->
+    case file:list_dir(Dir) of
+        {ok, Names} ->
+            Res = lists:foldl(
+                    fun(Name, Acc) ->
+                        case Acc of
+                            ok ->
+                                Path = filename:join([Dir, Name]),
+                                case filelib:is_dir(Path) of
+                                    true ->
+                                        delete_dir_recursive(Path);
+                                    false ->
+                                        file:delete(Path)
+                                end;
+                            Err -> Err
+                        end
+                    end, ok, Names),
+            case Res of
+                ok -> file:del_dir(Dir);
+                Err -> Err
+            end;
+        {error, enoent} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %%====================================================================
 %% Entity helpers (stand/area by ID across sets)
