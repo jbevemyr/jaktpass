@@ -1273,7 +1273,12 @@ parse_multipart_file(A, FieldName) ->
     %% Läser hela body som binär och plockar ut fältet "file".
     CT0 = header_value(A#arg.headers, "content-type"),
     multipart_dbg("content-type=~p", [CT0]),
-    multipart_dbg("clidata=~p cont=~p", [A#arg.clidata, A#arg.cont]),
+    multipart_dbg("clidata_bytes=~p clidata_tag=~p cont=~p state_tag=~p", [
+        clidata_bytes(A#arg.clidata),
+        clidata_tag(A#arg.clidata),
+        A#arg.cont,
+        state_tag(A#arg.state)
+    ]),
 
     %% Försök först med Yaws inbyggda multipart-parser (om den finns).
     %% OBS: Den kan returnera continuation: {cont, Cont, Res} och kräver {get_more, Cont, State}.
@@ -1339,16 +1344,55 @@ parse_multipart_file_manual(A, FieldName, CT0) ->
 pick_file_part_yaws([], _FieldName) ->
     {error, missing};
 pick_file_part_yaws([P | Rest], FieldName) ->
+    Want = normalize_field_name(FieldName),
     case P of
-        {FieldName, {Filename, _CT, Bin}} ->
-            {ok, #{filename => Filename, data => Bin}};
-        {FieldName, {Filename, _CT, _Charset, Bin}} ->
-            {ok, #{filename => Filename, data => Bin}};
-        {FieldName, {Filename, _CT, Bin, _}} ->
-            {ok, #{filename => Filename, data => Bin}};
-        {_Other, _} ->
+        {K, V} ->
+            case normalize_field_name(K) =:= Want of
+                true ->
+                    case V of
+                        {Filename, _CT, Bin} when is_binary(Bin) ->
+                            {ok, #{filename => Filename, data => Bin}};
+                        {Filename, _CT, _Charset, Bin} when is_binary(Bin) ->
+                            {ok, #{filename => Filename, data => Bin}};
+                        {Filename, _CT, Bin, _Extra} when is_binary(Bin) ->
+                            {ok, #{filename => Filename, data => Bin}};
+                        _ ->
+                            pick_file_part_yaws(Rest, FieldName)
+                    end;
+                false ->
+                    pick_file_part_yaws(Rest, FieldName)
+            end;
+        _ ->
             pick_file_part_yaws(Rest, FieldName)
     end.
+
+normalize_field_name(V) when is_atom(V) ->
+    normalize_field_name(atom_to_list(V));
+normalize_field_name(V) when is_binary(V) ->
+    normalize_field_name(binary_to_list(V));
+normalize_field_name(V) when is_list(V) ->
+    string:to_lower(V);
+normalize_field_name(_Other) ->
+    "".
+
+clidata_tag(B) when is_binary(B) -> binary;
+clidata_tag({partial, _}) -> partial;
+clidata_tag({file, _}) -> file;
+clidata_tag({file, _, _}) -> file;
+clidata_tag({tmpfile, _}) -> tmpfile;
+clidata_tag(undefined) -> undefined;
+clidata_tag(_) -> other.
+
+clidata_bytes(B) when is_binary(B) -> byte_size(B);
+clidata_bytes({partial, D}) when is_binary(D) -> byte_size(D);
+clidata_bytes({file, _Path}) -> -1;
+clidata_bytes({file, _Path, Len}) when is_integer(Len) -> Len;
+clidata_bytes({tmpfile, _Path}) -> -1;
+clidata_bytes(_) -> 0.
+
+state_tag(S) when is_record(S, mp_state) -> mp_state;
+state_tag(undefined) -> undefined;
+state_tag(_) -> other.
 
 header_value(H, NameLower) when is_record(H, headers) ->
     %% Försök först via recordfält
