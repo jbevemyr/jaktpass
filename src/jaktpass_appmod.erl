@@ -1356,8 +1356,12 @@ pick_file_part_yaws(Parts, FieldName) when is_list(Parts) ->
     %% 1) "Färdiga" parts: {file, {Filename, CT, Bin}}
     %% 2) En event-ström: {head, ...}, {part_body, ...}, ...
     case Parts of
-        [{head, _} | _] -> pick_file_part_yaws_events(Parts, FieldName);
-        [{part_body, _} | _] -> pick_file_part_yaws_events(Parts, FieldName);
+        [{head, _} | _] ->
+            multipart_dbg("yaws multipart mode=events (starts with head)", []),
+            pick_file_part_yaws_events(Parts, FieldName);
+        [{part_body, _} | _] ->
+            multipart_dbg("yaws multipart mode=events (starts with part_body)", []),
+            pick_file_part_yaws_events(Parts, FieldName);
         _ -> pick_file_part_yaws_kv(Parts, FieldName)
     end.
 
@@ -1407,8 +1411,13 @@ pick_file_part_yaws_events([{head, Head0} | Rest], FieldName, Collecting, Filena
             {ok, #{filename => Filename, data => iolist_to_binary(lists:reverse(BodyAcc))}};
         false ->
             Hdrs = yaws_head_to_hdrmap(Head0),
+            multipart_dbg("yaws head keys=~p cd=~p", [
+                maps:keys(Hdrs),
+                maps:get("content-disposition", Hdrs, undefined)
+            ]),
             case part_is_field(Hdrs, FieldName) of
                 {true, FN} ->
+                    multipart_dbg("yaws head matched field=~p filename=~p", [FieldName, FN]),
                     pick_file_part_yaws_events(Rest, FieldName, true, FN, []);
                 false ->
                     pick_file_part_yaws_events(Rest, FieldName, false, "upload.bin", [])
@@ -1440,9 +1449,9 @@ yaws_head_to_hdrmap(H) when is_list(H) ->
               fun(E, Acc) ->
                   case E of
                       {http_header, _I, Name, _Reserved, Val} ->
-                          Acc#{string:lowercase(string:trim(v_to_list(Name))) => string:trim(v_to_list(Val))};
+                          Acc#{normalize_header_name(Name) => string:trim(v_to_list(Val))};
                       {K, V} ->
-                          Acc#{string:lowercase(string:trim(v_to_list(K))) => string:trim(v_to_list(V))};
+                          Acc#{normalize_header_name(K) => string:trim(v_to_list(V))};
                       _ ->
                           Acc
                   end
@@ -1460,6 +1469,11 @@ v_to_list(L) when is_list(L) -> L;
 v_to_list(A) when is_atom(A) -> atom_to_list(A);
 v_to_list(I) when is_integer(I) -> integer_to_list(I);
 v_to_list(T) -> io_lib:format("~p", [T]).
+
+normalize_header_name(V) ->
+    %% Normalisera headernamn till "content-disposition" (små bokstäver, '_' -> '-')
+    S0 = string:lowercase(string:trim(v_to_list(V))),
+    [case C of $_ -> $-; _ -> C end || C <- S0].
 
 normalize_field_name(V) when is_atom(V) ->
     normalize_field_name(atom_to_list(V));
