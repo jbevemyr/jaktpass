@@ -153,7 +153,8 @@ function setRow(setObj) {
   btnShare.addEventListener("click", async () => {
     try {
       const r = await api(`/api/v2/sets/${encodeURIComponent(setObj.id)}/share`, { method: "POST" });
-      const url = r?.data?.shareUrl || "";
+      const url0 = r?.data?.shareUrl || "";
+      const url = url0 && String(url0).startsWith("http") ? String(url0) : (location.origin + String(url0 || ""));
       const i = $("#v2-share-url");
       if (i) i.value = url;
       toast("Länk klar.");
