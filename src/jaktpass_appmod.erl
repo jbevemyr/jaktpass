@@ -1417,10 +1417,25 @@ pick_file_part_yaws_events([{head, Head0} | Rest], FieldName, Collecting, Filena
             ]),
             case part_is_field(Hdrs, FieldName) of
                 {true, FN} ->
-                    multipart_dbg("yaws head matched field=~p filename=~p", [FieldName, FN]),
+                    multipart_dbg("yaws head matched via content-disposition field=~p filename=~p", [FieldName, FN]),
                     pick_file_part_yaws_events(Rest, FieldName, true, FN, []);
                 false ->
-                    pick_file_part_yaws_events(Rest, FieldName, false, "upload.bin", [])
+                    %% Yaws 2.0.8 kan ge head som redan associerar fältnamnet direkt (t.ex. key="file")
+                    Want = normalize_field_name(FieldName),
+                    PN = maps:get("__yaws_part_name", Hdrs, undefined),
+                    V = maps:get(Want, Hdrs, undefined),
+                    case {PN, V} of
+                        {PN1, _} when is_list(PN1) ->
+                            case normalize_field_name(PN1) =:= Want of
+                                true ->
+                                    multipart_dbg("yaws head matched via __yaws_part_name field=~p", [FieldName]),
+                                    pick_file_part_yaws_events(Rest, FieldName, true, "upload.bin", []);
+                                false ->
+                                    pick_file_part_yaws_events_match_head_value(Rest, FieldName, Head0, V)
+                            end;
+                        _ ->
+                            pick_file_part_yaws_events_match_head_value(Rest, FieldName, Head0, V)
+                    end
             end
     end;
 pick_file_part_yaws_events([{part_body, Chunk0} | Rest], FieldName, Collecting, Filename, BodyAcc) ->
@@ -1431,8 +1446,22 @@ pick_file_part_yaws_events([{part_body, Chunk0} | Rest], FieldName, Collecting, 
         false ->
             pick_file_part_yaws_events(Rest, FieldName, false, Filename, BodyAcc)
     end;
+pick_file_part_yaws_events([{body, Chunk0} | Rest], FieldName, Collecting, Filename, BodyAcc) ->
+    %% Vissa Yaws-varianter använder 'body' som sista chunk istället för 'part_body'
+    pick_file_part_yaws_events([{part_body, Chunk0} | Rest], FieldName, Collecting, Filename, BodyAcc);
 pick_file_part_yaws_events([_Other | Rest], FieldName, Collecting, Filename, BodyAcc) ->
     pick_file_part_yaws_events(Rest, FieldName, Collecting, Filename, BodyAcc).
+
+pick_file_part_yaws_events_match_head_value(Rest, FieldName, Head0, V) ->
+    case V =/= undefined of
+        true ->
+            FN2 = yaws_guess_filename(V),
+            multipart_dbg("yaws head matched via head-key field=~p filename=~p", [FieldName, FN2]),
+            pick_file_part_yaws_events(Rest, FieldName, true, FN2, []);
+        false ->
+            multipart_dbg("yaws head did not match field=~p raw=~p", [FieldName, Head0]),
+            pick_file_part_yaws_events(Rest, FieldName, false, "upload.bin", [])
+    end.
 
 yaws_head_to_hdrmap(H) when is_binary(H) ->
     %% Kan vara rå header-block som binär
@@ -1459,10 +1488,24 @@ yaws_head_to_hdrmap(H) when is_list(H) ->
               #{},
               H)
     end;
-yaws_head_to_hdrmap({Hdrs, _Other}) ->
-    yaws_head_to_hdrmap(Hdrs);
+yaws_head_to_hdrmap({Name, Hdrs}) ->
+    %% Ibland är head = {FieldName, Headers}
+    M = yaws_head_to_hdrmap(Hdrs),
+    M#{"__yaws_part_name" => v_to_list(Name)};
 yaws_head_to_hdrmap(_Other) ->
     #{}.
+
+yaws_guess_filename(V) ->
+    %% Försök plocka ut filename om head innehåller mer än bara ett markeringsvärde.
+    case V of
+        {Filename, _CT} -> v_to_list(Filename);
+        {Filename, _CT, _} -> v_to_list(Filename);
+        {Filename, _CT, _, _} -> v_to_list(Filename);
+        Filename when is_binary(Filename); is_list(Filename); is_atom(Filename) ->
+            v_to_list(Filename);
+        _ ->
+            "upload.bin"
+    end.
 
 v_to_list(B) when is_binary(B) -> binary_to_list(B);
 v_to_list(L) when is_list(L) -> L;
