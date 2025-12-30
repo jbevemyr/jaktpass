@@ -1262,14 +1262,19 @@ parse_multipart_file(A, FieldName) ->
     %% Egen multipart-parser för kompatibilitet mellan Yaws-versioner.
     %% Läser hela body som binär och plockar ut fältet "file".
     CT0 = header_value(A#arg.headers, "content-type"),
+    multipart_dbg("content-type=~p", [CT0]),
     case multipart_boundary(CT0) of
         {ok, Boundary} ->
+            multipart_dbg("boundary=~p", [Boundary]),
             case recv_body_bin(A) of
                 {ok, Bin} ->
+                    multipart_dbg("body bytes=~p first32=~p", [byte_size(Bin), binary:part(Bin, 0, erlang:min(32, byte_size(Bin)))]),
                     case multipart_find_file(Bin, Boundary, FieldName) of
                         {ok, Filename, Data} ->
+                            multipart_dbg("found file field=~p filename=~p bytes=~p", [FieldName, Filename, byte_size(Data)]),
                             {ok, #{filename => Filename, data => Data}};
                         {error, Reason} ->
+                            multipart_dbg("missing file field=~p reason=~p", [FieldName, Reason]),
                             {error, Reason}
                     end;
                 {error, Msg} ->
@@ -1340,6 +1345,7 @@ multipart_find_file(Bin, Boundary, FieldName) when is_binary(Bin), is_list(Bound
     Delim = list_to_binary(["--", Boundary]),
     Parts0 = binary:split(Bin, Delim, [global]),
     Parts = [P || P <- Parts0, P =/= <<>>, P =/= <<"--">>, P =/= <<"\r\n">>],
+    multipart_dbg("parts0=~p parts=~p", [length(Parts0), length(Parts)]),
     multipart_find_file_parts(Parts, FieldName).
 
 multipart_find_file_parts([], _FieldName) ->
@@ -1350,6 +1356,10 @@ multipart_find_file_parts([Chunk0 | Rest], FieldName) ->
         [HdrBin, Body0] ->
             Body = strip_trailing_crlf(Body0),
             Headers = parse_part_headers(binary_to_list(HdrBin)),
+            case maps:get("content-disposition", Headers, undefined) of
+                undefined -> multipart_dbg("part headers keys=~p (no content-disposition)", [maps:keys(Headers)]);
+                CD -> multipart_dbg("content-disposition=~s", [CD])
+            end,
             case part_is_field(Headers, FieldName) of
                 {true, Filename} ->
                     {ok, Filename, Body};
@@ -1576,6 +1586,11 @@ recv_body_loop(ArgOrCont, Acc) ->
             recv_body_loop(Next, [B | Acc]);
         {cont, Next, L} when is_list(L) ->
             recv_body_loop(Next, [list_to_binary(L) | Acc]);
+        %% Vissa Yaws-versioner kan returnera extra metadata i cont-tuple.
+        {cont, Next, B, _} when is_binary(B) ->
+            recv_body_loop(Next, [B | Acc]);
+        {cont, Next, _Len, B} when is_integer(_Len), is_binary(B) ->
+            recv_body_loop(Next, [B | Acc]);
         {cont, Next} ->
             recv_body_loop(Next, Acc);
         B when is_binary(B) ->
@@ -1584,6 +1599,14 @@ recv_body_loop(ArgOrCont, Acc) ->
             {ok, iolist_to_binary(lists:reverse([list_to_binary(L) | Acc]))};
         _ ->
             {ok, iolist_to_binary(lists:reverse(Acc))}
+    end.
+
+multipart_dbg(Fmt, Args) ->
+    case getenv_default("JAKTPASS_DEBUG_MULTIPART", "false") of
+        "1" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
+        "true" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
+        "yes" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
+        _ -> ok
     end.
 
 validate_nonempty_string(undefined) -> {error, <<"missing">>};
