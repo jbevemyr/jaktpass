@@ -1259,29 +1259,144 @@ split_by_id([E | Rest], Id, Acc) ->
 %%====================================================================
 
 parse_multipart_file(A, FieldName) ->
-    %% Yaws provides yaws_api:parse_multipart_post/1 in common setups.
-    case erlang:function_exported(yaws_api, parse_multipart_post, 1) of
-        true ->
-            try
-                Parts = yaws_api:parse_multipart_post(A),
-                pick_file_part(Parts, FieldName)
-            catch _:_ ->
-                {error, <<"failed_to_parse_multipart">>}
+    %% Egen multipart-parser för kompatibilitet mellan Yaws-versioner.
+    %% Läser hela body som binär och plockar ut fältet "file".
+    CT0 = header_value(A#arg.headers, "content-type"),
+    case multipart_boundary(CT0) of
+        {ok, Boundary} ->
+            case recv_body_bin(A) of
+                {ok, Bin} ->
+                    case multipart_find_file(Bin, Boundary, FieldName) of
+                        {ok, Filename, Data} ->
+                            {ok, #{filename => Filename, data => Data}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                {error, Msg} ->
+                    {error, Msg}
             end;
-        false ->
-            {error, <<"multipart_not_supported_in_this_yaws">>}
+        {error, Reason} ->
+            {error, Reason}
     end.
 
-pick_file_part([], _FieldName) ->
+header_value(H, NameLower) when is_record(H, headers) ->
+    %% Försök först via recordfält
+    case NameLower of
+        "content-type" ->
+            case H#headers.content_type of
+                undefined -> header_other_value(NameLower, H#headers.other);
+                V -> V
+            end;
+        _ ->
+            header_other_value(NameLower, H#headers.other)
+    end;
+header_value(_, _NameLower) ->
+    undefined.
+
+header_other_value(_NameLower, []) ->
+    undefined;
+header_other_value(NameLower, [{http_header, _I, Name, _Reserved, Val} | Rest]) ->
+    case string:lowercase(header_name_to_list(Name)) of
+        NameLower -> Val;
+        _ -> header_other_value(NameLower, Rest)
+    end;
+header_other_value(NameLower, [_ | Rest]) ->
+    header_other_value(NameLower, Rest).
+
+multipart_boundary(undefined) ->
+    {error, <<"missing_content_type">>};
+multipart_boundary(CT0) ->
+    CT = case CT0 of
+             B when is_binary(B) -> binary_to_list(B);
+             L when is_list(L) -> L;
+             _ -> ""
+         end,
+    %% Ex: multipart/form-data; boundary=----WebKitFormBoundary...
+    case re:run(CT, "boundary=([^;\\s]+)", [{capture, [1], list}]) of
+        {match, [B0]} ->
+            B1 = string:trim(B0, both, $"),
+            {ok, B1};
+        _ ->
+            {error, <<"invalid_multipart_content_type">>}
+    end.
+
+multipart_find_file(Bin, Boundary, FieldName) when is_binary(Bin), is_list(Boundary) ->
+    Delim = list_to_binary(["--", Boundary]),
+    Parts0 = binary:split(Bin, Delim, [global]),
+    Parts = [P || P <- Parts0, P =/= <<>>, P =/= <<"--">>, P =/= <<"\r\n">>],
+    multipart_find_file_parts(Parts, FieldName).
+
+multipart_find_file_parts([], _FieldName) ->
     {error, <<"missing_file_field">>};
-pick_file_part([P | Rest], FieldName) ->
-    case P of
-        {FieldName, {Filename, _CT, Bin}} ->
-            {ok, #{filename => Filename, data => Bin}};
-        {FieldName, {Filename, _CT, _Charset, Bin}} ->
-            {ok, #{filename => Filename, data => Bin}};
-        {_Other, _} ->
-            pick_file_part(Rest, FieldName)
+multipart_find_file_parts([Chunk0 | Rest], FieldName) ->
+    Chunk1 = strip_crlf(Chunk0),
+    case binary:split(Chunk1, <<"\r\n\r\n">>, []) of
+        [HdrBin, Body0] ->
+            Body = strip_trailing_crlf(Body0),
+            Headers = parse_part_headers(binary_to_list(HdrBin)),
+            case part_is_field(Headers, FieldName) of
+                {true, Filename} ->
+                    {ok, Filename, Body};
+                false ->
+                    multipart_find_file_parts(Rest, FieldName)
+            end;
+        _ ->
+            multipart_find_file_parts(Rest, FieldName)
+    end.
+
+strip_crlf(<<"\r\n", Rest/binary>>) -> Rest;
+strip_crlf(B) -> B.
+
+strip_trailing_crlf(Bin) ->
+    Sz = byte_size(Bin),
+    case Sz >= 2 andalso binary:part(Bin, Sz - 2, 2) =:= <<"\r\n">> of
+        true -> binary:part(Bin, 0, Sz - 2);
+        false -> Bin
+    end.
+
+parse_part_headers(Str) ->
+    %% return map lower-name -> value
+    Lines = string:tokens(Str, "\r\n"),
+    lists:foldl(
+      fun(Line, Acc) ->
+          case string:tokens(Line, ":") of
+              [K | Vs] ->
+                  V = string:trim(string:join(Vs, ":")),
+                  Acc#{string:lowercase(string:trim(K)) => V};
+              _ ->
+                  Acc
+          end
+      end, #{}, Lines).
+
+part_is_field(Hdrs, FieldName) ->
+    case maps:get("content-disposition", Hdrs, undefined) of
+        undefined -> false;
+        CD ->
+            %% Ex: form-data; name="file"; filename="x.png"
+            Name = multipart_cd_param(CD, "name"),
+            case Name =:= FieldName of
+                true ->
+                    Filename0 = multipart_cd_param(CD, "filename"),
+                    Filename = case Filename0 of "" -> "upload.bin"; _ -> Filename0 end,
+                    {true, Filename};
+                false ->
+                    false
+            end
+    end.
+
+multipart_cd_param(CD0, Key) ->
+    CD = case CD0 of
+             B when is_binary(B) -> binary_to_list(B);
+             L when is_list(L) -> L
+         end,
+    %% key="value" eller key=value
+    Re = Key ++ "=\"([^\"]*)\"|" ++ Key ++ "=([^;\\s]+)",
+    case re:run(CD, Re, [{capture, all, list}]) of
+        {match, [_All, V1, V2]} ->
+            V = case V1 of "" -> V2; _ -> V1 end,
+            string:trim(V, both, $");
+        _ ->
+            ""
     end.
 
 image_ext(OrigName0) ->
