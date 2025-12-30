@@ -1509,12 +1509,7 @@ recv_body_bin(A) ->
     case erlang:function_exported(yaws_api, recv_body, 1) of
         true ->
             try
-                case yaws_api:recv_body(A) of
-                    {ok, B} when is_binary(B) -> {ok, B};
-                    B when is_binary(B) -> {ok, B};
-                    L when is_list(L) -> {ok, list_to_binary(L)};
-                    _ -> {ok, <<>>}
-                end
+                recv_body_loop(A, [])
             catch _:_ ->
                 {error, <<"failed_to_read_body">>}
             end;
@@ -1526,6 +1521,26 @@ recv_body_bin(A) ->
                 L when is_list(L) -> {ok, list_to_binary(L)};
                 _ -> {ok, <<>>}
             end
+    end.
+
+recv_body_loop(ArgOrCont, Acc) ->
+    case yaws_api:recv_body(ArgOrCont) of
+        {ok, B} when is_binary(B) ->
+            {ok, iolist_to_binary(lists:reverse([B | Acc]))};
+        {ok, L} when is_list(L) ->
+            {ok, iolist_to_binary(lists:reverse([list_to_binary(L) | Acc]))};
+        {cont, Next, B} when is_binary(B) ->
+            recv_body_loop(Next, [B | Acc]);
+        {cont, Next, L} when is_list(L) ->
+            recv_body_loop(Next, [list_to_binary(L) | Acc]);
+        {cont, Next} ->
+            recv_body_loop(Next, Acc);
+        B when is_binary(B) ->
+            {ok, iolist_to_binary(lists:reverse([B | Acc]))};
+        L when is_list(L) ->
+            {ok, iolist_to_binary(lists:reverse([list_to_binary(L) | Acc]))};
+        _ ->
+            {ok, iolist_to_binary(lists:reverse(Acc))}
     end.
 
 validate_nonempty_string(undefined) -> {error, <<"missing">>};
