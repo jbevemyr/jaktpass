@@ -345,10 +345,10 @@ function renderQuizHome() {
     return;
   }
   state.sets.forEach((s) => {
-    const left = el("div", {}, [
-      el("div", { class: "title", text: s.name }),
-      el("div", { class: "meta", text: s.hasImage ? "Har bild" : "Ingen bild än" }),
-    ]);
+    const leftKids = [el("div", { class: "title", text: s.name })];
+    // Visa inte "Har bild" (bara visa hint om bild saknas)
+    if (!s.hasImage) leftKids.push(el("div", { class: "meta", text: "Ingen bild än" }));
+    const left = el("div", {}, leftKids);
     const btnStart = el("button", { class: "play-btn", text: "Start" });
     btnStart.addEventListener("click", () => startQuiz(s.id));
     const btnMap = el("button", { class: "secondary play-btn", text: "Karta" });

@@ -144,7 +144,8 @@ function setRow(setObj) {
 
   const left = document.createElement("div");
   left.appendChild(Object.assign(document.createElement("div"), { className: "title", textContent: setObj.name }));
-  left.appendChild(Object.assign(document.createElement("div"), { className: "meta", textContent: setObj.hasImage ? "Har bild" : "Ingen bild" }));
+  // Visa inte "Har bild" (bara visa hint om bild saknas)
+  if (!setObj.hasImage) left.appendChild(Object.assign(document.createElement("div"), { className: "meta", textContent: "Ingen bild" }));
 
   const btnShare = document.createElement("button");
   btnShare.className = "secondary play-btn";
@@ -199,7 +200,8 @@ async function renderAdmin() {
       await api("/api/v2/sets", { method: "POST", jsonBody: { name: name.value } });
       name.value = "";
       toast("Skapat.");
-      navTo("#/admin");
+      // Vi är redan på #/admin och hashchange triggar inte alltid vid samma hash → re-render direkt.
+      await renderAdmin();
     } catch {
       toast("Kunde inte skapa set.");
     }
