@@ -148,6 +148,23 @@ button.danger { background: var(--danger); color: #0b0d10; }
   transform: translate(-50%, -50%);
   pointer-events: auto;
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* Mobil/padda: större träffyta utan att pricken blir visuellt större */
+@media (pointer: coarse) {
+  .dot::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 34px;
+    height: 34px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    background: transparent;
+    pointer-events: auto;
+  }
 }
 
 /* Admin: behåll "gula" prickar */
