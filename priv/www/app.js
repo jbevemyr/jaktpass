@@ -142,6 +142,7 @@ let state = {
     mistakesByQuestion: {}, // standId -> mistakes (capped)
     dotStates: {}, // standId -> "correct1" | "correct2" | "correct3" | "reveal"
     labelsPersistent: {}, // standId -> name
+    tempLabels: {}, // standId -> expiresAt (ms)
     standNameById: {}, // standId -> name (från set-meta)
     meta: null,
     revealActive: false,
@@ -737,6 +738,18 @@ function renderQuizPack(meta, pack) {
     labels.push({ x: vs.x, y: vs.y, text: name, className: "" });
   });
 
+  // Temporära labels (vid felklick) – måste renderas här så de inte försvinner vid re-render,
+  // t.ex. när vi går in i reveal-läget efter 3 fel.
+  const now = Date.now();
+  Object.keys(state.quiz.tempLabels || {}).forEach((id) => {
+    const until = state.quiz.tempLabels[id];
+    if (!until || until <= now) return;
+    const vs = visibleById[id];
+    if (!vs) return;
+    const nm = displayStandName(state.quiz.standNameById?.[id] || id);
+    labels.push({ x: vs.x, y: vs.y, text: nm, className: "temp" });
+  });
+
   const dots = (pack.visibleStands || []).map((s) => ({
     x: s.x,
     y: s.y,
@@ -785,7 +798,7 @@ function renderQuizPack(meta, pack) {
         state.quiz.mistakesTotal += 1;
         updateScore();
       }
-      showTempLabel(s.id, s.x, s.y);
+      showTempLabel(s.id);
 
       // Efter 3 fel: rätt prick blinkar rött tills man klickar på den.
       if (!state.quiz.revealActive && state.quiz.attempts >= 3) {
@@ -804,17 +817,20 @@ function renderQuizPack(meta, pack) {
   $("#quiz-debug").textContent = "";
 }
 
-function showTempLabel(standId, x, y) {
-  const name = displayStandName(state.quiz.standNameById?.[standId] || standId);
-  const container = $("#quiz-map");
-  const n = el("div", { class: "map-label temp", text: name });
-  n.style.left = `${x * 100}%`;
-  n.style.top = `${y * 100}%`;
-  container.appendChild(n);
-  // städa bort efter animationen (1s)
+function showTempLabel(standId) {
+  const id = String(standId || "");
+  if (!id) return;
+  const ms = 1000;
+  state.quiz.tempLabels[id] = Date.now() + ms;
+  // Rensa efter att animationen är klar och re-rendera om vi fortfarande är i quiz-play.
   setTimeout(() => {
-    try { n.remove(); } catch {}
-  }, 1200);
+    if (!state.quiz.tempLabels[id]) return;
+    if (state.quiz.tempLabels[id] > Date.now()) return;
+    delete state.quiz.tempLabels[id];
+    try {
+      if (state.quiz.meta && state.quiz.pack) renderQuizPack(state.quiz.meta, state.quiz.pack);
+    } catch {}
+  }, ms + 250);
 }
 
 function advanceQuiz() {
@@ -861,6 +877,7 @@ async function startQuiz(setId) {
   state.quiz.mistakesByQuestion = {};
   state.quiz.dotStates = {};
   state.quiz.labelsPersistent = {};
+  state.quiz.tempLabels = {};
   state.quiz.revealActive = false;
   state.quiz.revealId = null;
   // map standId -> name för labels vid felklick
