@@ -822,6 +822,10 @@ function showTempLabel(standId) {
   if (!id) return;
   const ms = 1000;
   state.quiz.tempLabels[id] = Date.now() + ms;
+  // Rendera direkt så labeln syns omedelbart vid felklick.
+  try {
+    if (state.quiz.meta && state.quiz.pack) renderQuizPack(state.quiz.meta, state.quiz.pack);
+  } catch {}
   // Rensa efter att animationen är klar och re-rendera om vi fortfarande är i quiz-play.
   setTimeout(() => {
     if (!state.quiz.tempLabels[id]) return;
