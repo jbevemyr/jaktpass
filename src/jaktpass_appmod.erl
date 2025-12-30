@@ -1562,7 +1562,18 @@ recv_body_bin(A) ->
     case erlang:function_exported(yaws_api, recv_body, 1) of
         true ->
             try
-                recv_body_loop(A, [])
+                %% Yaws kan ha lagt body (helt eller delvis) i clidata eller via cont (continuation).
+                case A#arg.clidata of
+                    B when is_binary(B), byte_size(B) > 0 ->
+                        {ok, B};
+                    L when is_list(L), length(L) > 0 ->
+                        {ok, list_to_binary(L)};
+                    _ ->
+                        case A#arg.cont of
+                            undefined -> recv_body_loop(A, []);
+                            Cont -> recv_body_loop(Cont, [])
+                        end
+                end
             catch _:_ ->
                 {error, <<"failed_to_read_body">>}
             end;
