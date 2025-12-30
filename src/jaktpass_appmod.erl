@@ -1564,6 +1564,12 @@ recv_body_bin(A) ->
             try
                 %% Yaws kan ha lagt body (helt eller delvis) i clidata eller via cont (continuation).
                 case A#arg.clidata of
+                    {file, Path} ->
+                        file:read_file(path_to_list(Path));
+                    {file, Path, _Len} ->
+                        file:read_file(path_to_list(Path));
+                    {tmpfile, Path} ->
+                        file:read_file(path_to_list(Path));
                     B when is_binary(B), byte_size(B) > 0 ->
                         {ok, B};
                     L when is_list(L), length(L) > 0 ->
@@ -1586,6 +1592,10 @@ recv_body_bin(A) ->
                 _ -> {ok, <<>>}
             end
     end.
+
+path_to_list(B) when is_binary(B) -> binary_to_list(B);
+path_to_list(L) when is_list(L) -> L;
+path_to_list(T) -> io_lib:format("~s", [T]).
 
 recv_body_loop(ArgOrCont, Acc) ->
     case yaws_api:recv_body(ArgOrCont) of
