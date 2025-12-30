@@ -1302,14 +1302,24 @@ parse_multipart_file(A, FieldName) ->
                              _ -> #mp_state{}
                          end,
                     Parts = P0#mp_state.acc ++ Res,
+                    multipart_dbg("yaws result parts=~p keys=~p", [length(Parts), summarize_part_keys(Parts, 12)]),
                     case pick_file_part_yaws(Parts, FieldName) of
-                        {ok, File} -> {ok, File};
-                        _ -> {error, <<"missing_file_field">>}
+                        {ok, File = #{filename := FN, data := Data}} ->
+                            multipart_dbg("yaws found file filename=~p bytes=~p", [FN, byte_size(Data)]),
+                            {ok, File};
+                        _ ->
+                            multipart_dbg("yaws missing file field want=~p keys=~p", [FieldName, summarize_part_keys(Parts, 12)]),
+                            {error, <<"missing_file_field">>}
                     end;
                 Parts when is_list(Parts) ->
+                    multipart_dbg("yaws parts(list) parts=~p keys=~p", [length(Parts), summarize_part_keys(Parts, 12)]),
                     case pick_file_part_yaws(Parts, FieldName) of
-                        {ok, File} -> {ok, File};
-                        _ -> {error, <<"missing_file_field">>}
+                        {ok, File = #{filename := FN, data := Data}} ->
+                            multipart_dbg("yaws found file filename=~p bytes=~p", [FN, byte_size(Data)]),
+                            {ok, File};
+                        _ ->
+                            multipart_dbg("yaws missing file field want=~p keys=~p", [FieldName, summarize_part_keys(Parts, 12)]),
+                            {error, <<"missing_file_field">>}
                     end;
                 Other ->
                     multipart_dbg("yaws_api:parse_multipart_post unexpected=~p", [Other]),
@@ -1350,12 +1360,16 @@ pick_file_part_yaws([P | Rest], FieldName) ->
             case normalize_field_name(K) =:= Want of
                 true ->
                     case V of
-                        {Filename, _CT, Bin} when is_binary(Bin) ->
-                            {ok, #{filename => Filename, data => Bin}};
-                        {Filename, _CT, _Charset, Bin} when is_binary(Bin) ->
-                            {ok, #{filename => Filename, data => Bin}};
-                        {Filename, _CT, Bin, _Extra} when is_binary(Bin) ->
-                            {ok, #{filename => Filename, data => Bin}};
+                        {Filename, _CT, Body0} ->
+                            case yaws_body_bin(Body0) of
+                                {ok, Body} -> {ok, #{filename => Filename, data => Body}};
+                                error -> pick_file_part_yaws(Rest, FieldName)
+                            end;
+                        {Filename, _CT, _Charset, Body0} ->
+                            case yaws_body_bin(Body0) of
+                                {ok, Body} -> {ok, #{filename => Filename, data => Body}};
+                                error -> pick_file_part_yaws(Rest, FieldName)
+                            end;
                         _ ->
                             pick_file_part_yaws(Rest, FieldName)
                     end;
@@ -1374,6 +1388,30 @@ normalize_field_name(V) when is_list(V) ->
     string:to_lower(V);
 normalize_field_name(_Other) ->
     "".
+
+yaws_body_bin(B) when is_binary(B) ->
+    {ok, B};
+yaws_body_bin(L) when is_list(L) ->
+    %% Yaws kan ge file-data som iolist/lista beroende på version/konfig.
+    try {ok, iolist_to_binary(L)} catch _:_ -> error end;
+yaws_body_bin(_Other) ->
+    error.
+
+summarize_part_keys(Parts, Limit) ->
+    %% Returnera en kort lista av fältnamn/nycklar för debug (utan att dumpa data).
+    summarize_part_keys(Parts, Limit, []).
+
+summarize_part_keys(_Parts, 0, Acc) ->
+    lists:reverse(Acc);
+summarize_part_keys([], _Limit, Acc) ->
+    lists:reverse(Acc);
+summarize_part_keys([P | Rest], Limit, Acc) ->
+    K =
+        case P of
+            {Key0, _V} -> normalize_field_name(Key0);
+            _ -> "?"
+        end,
+    summarize_part_keys(Rest, Limit - 1, [K | Acc]).
 
 clidata_tag(B) when is_binary(B) -> binary;
 clidata_tag({partial, _}) -> partial;
