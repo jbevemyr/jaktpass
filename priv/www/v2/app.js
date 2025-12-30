@@ -14,6 +14,146 @@ function toast(msg, ms = 1400) {
   }, ms);
 }
 
+function getOrCreateFinishModal() {
+  let m = document.querySelector("#v2-finish-modal");
+  if (m) return m;
+
+  m = document.createElement("div");
+  m.id = "v2-finish-modal";
+  m.className = "modal";
+  m.style.display = "none";
+  m.setAttribute("aria-hidden", "true");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.addEventListener("click", () => showFinishModal(false));
+
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.id = "v2-finish-title";
+  title.textContent = "Resultat";
+
+  const score = document.createElement("div");
+  score.id = "v2-finish-score";
+  score.className = "pill";
+  score.style.display = "inline-block";
+  score.style.marginBottom = "10px";
+
+  const name = document.createElement("input");
+  name.id = "v2-finish-name";
+  name.placeholder = "Ditt namn";
+
+  const btnSave = document.createElement("button");
+  btnSave.id = "v2-finish-save";
+  btnSave.textContent = "Spara till topplista";
+
+  const lbTitle = document.createElement("div");
+  lbTitle.className = "small";
+  lbTitle.style.marginTop = "10px";
+  lbTitle.textContent = "Topplista";
+
+  const list = document.createElement("ol");
+  list.id = "v2-finish-leaderboard";
+  list.style.marginTop = "6px";
+
+  const btnClose = document.createElement("button");
+  btnClose.className = "secondary";
+  btnClose.textContent = "Stäng";
+  btnClose.addEventListener("click", () => showFinishModal(false));
+
+  const row1 = document.createElement("div");
+  row1.className = "row";
+  row1.style.gap = "8px";
+  row1.appendChild(name);
+  row1.appendChild(btnSave);
+
+  const row2 = document.createElement("div");
+  row2.className = "row";
+  row2.style.justifyContent = "flex-end";
+  row2.appendChild(btnClose);
+
+  card.appendChild(title);
+  card.appendChild(score);
+  card.appendChild(row1);
+  card.appendChild(lbTitle);
+  card.appendChild(list);
+  card.appendChild(row2);
+
+  m.appendChild(backdrop);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  return m;
+}
+
+function renderLeaderboard(listEl, items) {
+  listEl.innerHTML = "";
+  if (!items || !items.length) {
+    const li = document.createElement("li");
+    li.textContent = "Ingen topplista ännu.";
+    listEl.appendChild(li);
+    return;
+  }
+  items.slice(0, 20).forEach((it) => {
+    const li = document.createElement("li");
+    li.style.display = "flex";
+    li.style.justifyContent = "space-between";
+    li.style.gap = "10px";
+    const left = document.createElement("span");
+    left.textContent = it.name || "";
+    const right = document.createElement("span");
+    right.className = "pill";
+    right.textContent = `${it.score}%`;
+    li.appendChild(left);
+    li.appendChild(right);
+    listEl.appendChild(li);
+  });
+}
+
+async function showFinishModal(opts, scoreValue, shareId, mode) {
+  const m = getOrCreateFinishModal();
+  const title = document.querySelector("#v2-finish-title");
+  const score = document.querySelector("#v2-finish-score");
+  const name = document.querySelector("#v2-finish-name");
+  const btnSave = document.querySelector("#v2-finish-save");
+  const list = document.querySelector("#v2-finish-leaderboard");
+
+  if (!opts) {
+    m.style.display = "none";
+    m.setAttribute("aria-hidden", "true");
+    return;
+  }
+  title.textContent = "Resultat";
+  score.textContent = `Score: ${scoreValue}%`;
+  name.value = name.value || "";
+
+  // Ladda topplista
+  try {
+    const r = await api(`/api/v2/quiz/${encodeURIComponent(shareId)}/leaderboard?mode=${encodeURIComponent(mode || "all")}`);
+    renderLeaderboard(list, r?.data?.items || []);
+  } catch {
+    renderLeaderboard(list, []);
+  }
+
+  btnSave.onclick = async () => {
+    const nm = (name.value || "").trim();
+    if (!nm) return toast("Skriv ditt namn.");
+    try {
+      const r = await api(`/api/v2/quiz/${encodeURIComponent(shareId)}/leaderboard`, { method: "POST", jsonBody: { name: nm, score: scoreValue, mode: mode || "all" } });
+      renderLeaderboard(list, r?.data?.items || []);
+      toast("Sparat.");
+    } catch {
+      toast("Kunde inte spara.");
+    }
+  };
+
+  m.style.display = "";
+  m.setAttribute("aria-hidden", "false");
+}
+
 async function api(path, { method = "GET", jsonBody } = {}) {
   const res = await fetch(path, {
     method,
@@ -526,6 +666,8 @@ async function renderQuiz(shareId) {
 
       let idx = 0;
       const solved = new Set();
+      let mistakes = 0;
+      let wrongThis = 0;
 
       function setQuestionText() {
         if (!questions.length) {
@@ -533,12 +675,15 @@ async function renderQuiz(shareId) {
           return;
         }
         if (idx >= questions.length) {
+          const N = questions.length;
+          const M = mistakes;
+          const score = Math.round(100 * N / (N + M));
           q.textContent = "Klart!";
-          toast("Quiz klart.");
+          showFinishModal(true, score, shareId, mode.value);
           return;
         }
         const cur = questions[idx];
-        q.textContent = `Hitta: ${cur.name} (${idx + 1}/${questions.length})`;
+        q.textContent = `Hitta: ${cur.name} (${idx + 1}/${questions.length})  •  Fel: ${mistakes}`;
       }
 
       // Rendera karta + prickar (minimal quiz-loop)
@@ -560,11 +705,26 @@ async function renderQuiz(shareId) {
           const got = s.id;
           if (got === want) {
             solved.add(got);
-            d.classList.add("correct1");
+            d.classList.add(wrongThis === 0 ? "correct1" : (wrongThis === 1 ? "correct2" : "correct3"));
+            wrongThis = 0;
             idx += 1;
             setQuestionText();
           } else {
+            if (wrongThis < 3) {
+              wrongThis += 1;
+              mistakes += 1;
+            }
             toast(`Fel: ${(nameById[got] || "pass")}`);
+            if (wrongThis >= 3) {
+              // Efter 3 fel: markera rätt prick röd och gå vidare
+              const wantEl = map.querySelector(`.dot[data-id="${want}"]`);
+              if (wantEl) wantEl.classList.add("reveal");
+              wrongThis = 0;
+              idx += 1;
+              setQuestionText();
+            } else {
+              setQuestionText();
+            }
           }
         });
         map.appendChild(d);

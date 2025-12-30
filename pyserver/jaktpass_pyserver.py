@@ -271,6 +271,9 @@ def v2_set_dir(admin_id: str, set_id: str) -> Path:
 def v2_set_meta_path(admin_id: str, set_id: str) -> Path:
     return v2_set_dir(admin_id, set_id) / "meta.json"
 
+def v2_leaderboard_path(admin_id: str, set_id: str) -> Path:
+    return v2_set_dir(admin_id, set_id) / "leaderboard.json"
+
 
 def v2_sessions_dir() -> Path:
     return v2_dir() / "sessions"
@@ -400,6 +403,21 @@ def v2_load_set_meta(admin_id: str, set_id: str) -> Dict[str, Any]:
 
 def v2_save_set_meta(admin_id: str, set_id: str, meta: Dict[str, Any]) -> None:
     atomic_write_json(v2_set_meta_path(admin_id, set_id), meta)
+
+
+def v2_load_leaderboard(admin_id: str, set_id: str) -> List[Dict[str, Any]]:
+    p = v2_leaderboard_path(admin_id, set_id)
+    try:
+        data = read_json(p)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def v2_save_leaderboard(admin_id: str, set_id: str, items: List[Dict[str, Any]]) -> None:
+    atomic_write_json(v2_leaderboard_path(admin_id, set_id), items)
 
 
 _SET_LOCKS: Dict[str, threading.Lock] = {}
@@ -979,6 +997,51 @@ class Handler(BaseHTTPRequestHandler):
                     visible = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y")} for s in sample]
                     questions = [{"standId": s.get("id"), "name": s.get("name")} for s in sample]
                     return self._ok({"mode": mode, "set": {"id": set_id, "name": (meta.get("set") or {}).get("name")}, "imageUrl": f"/api/v2/media/shares/{share_id}/image", "visibleStands": visible, "questions": questions})
+
+                if len(v2) == 3 and v2[0] == "quiz" and v2[2] == "leaderboard":
+                    share_id = unquote(v2[1])
+                    if method == "GET":
+                        qs = parse_qs(u.query or "")
+                        mode = normalize_mode((qs.get("mode") or ["all"])[0])
+                        share = v2_load_share(share_id)
+                        if not share:
+                            return self._err(404, "share_not_found", {})
+                        admin_id = str(share.get("adminId"))
+                        set_id = str(share.get("setId"))
+                        items = v2_load_leaderboard(admin_id, set_id)
+                        items = [i for i in items if (i.get("mode") or "all") == mode]
+                        items = sort_leaderboard(items)[:20]
+                        return self._ok({"mode": mode, "items": items})
+
+                    if method == "POST":
+                        body = self._read_json_body()
+                        if body is None:
+                            return self._err(400, "invalid_json", {})
+                        name = validate_nonempty_string(body.get("name"))
+                        try:
+                            score = int(body.get("score"))
+                        except Exception:
+                            return self._err(400, "invalid_score", {})
+                        mode = normalize_mode(str(body.get("mode") or "all"))
+                        if not name:
+                            return self._err(400, "invalid_name", {})
+                        if score < 0 or score > 100:
+                            return self._err(400, "invalid_score", {})
+                        share = v2_load_share(share_id)
+                        if not share:
+                            return self._err(404, "share_not_found", {})
+                        admin_id = str(share.get("adminId"))
+                        set_id = str(share.get("setId"))
+                        item = {"name": name, "score": score, "mode": mode, "createdAt": now_rfc3339()}
+                        with V2_LOCK:
+                            items = v2_load_leaderboard(admin_id, set_id)
+                            items = sort_leaderboard([item] + (items or []))[:200]
+                            try:
+                                v2_save_leaderboard(admin_id, set_id, items)
+                            except Exception as e:
+                                return self._err(500, "failed_to_save_leaderboard", {"error": str(e)})
+                        top = [i for i in items if (i.get("mode") or "all") == mode][:20]
+                        return self._ok({"saved": True, "mode": mode, "items": top}, code=201)
 
                 if method == "GET" and len(v2) == 4 and v2[:2] == ["media", "shares"] and v2[3] == "image":
                     share_id = unquote(v2[2])

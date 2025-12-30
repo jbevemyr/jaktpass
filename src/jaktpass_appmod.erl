@@ -102,6 +102,10 @@ dispatch('POST', ["v2", "sets", SetId, "share"], A) ->
     with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_share(Admin, SId) end) end);
 
 %% V2 public (share token)
+dispatch('GET', ["v2", "quiz", ShareId, "leaderboard"], A) ->
+    handle_v2_get_leaderboard(ShareId, A);
+dispatch('POST', ["v2", "quiz", ShareId, "leaderboard"], A) ->
+    handle_v2_post_leaderboard(ShareId, A);
 dispatch('GET', ["v2", "quiz", ShareId], A) ->
     handle_v2_get_quiz(ShareId, A);
 dispatch('GET', ["v2", "media", "shares", ShareId, "image"], _A) ->
@@ -865,6 +869,80 @@ handle_v2_get_share_image(ShareId0) ->
             json_error(404, <<"share_not_found">>, #{})
     end.
 
+%%--------------------------------------------------------------------
+%% V2 leaderboard (public via shareId)
+%%--------------------------------------------------------------------
+
+handle_v2_get_leaderboard(ShareId0, A) ->
+    Q = query_map(A),
+    Mode0 = maps:get(<<"mode">>, Q, <<"all">>),
+    Mode = normalize_quiz_mode(Mode0),
+    case v2_load_share(ShareId0) of
+        {ok, #{<<"adminId">> := AdminIdB, <<"setId">> := SetIdB}} ->
+            AdminId = binary_to_list(to_bin(AdminIdB)),
+            SetId = binary_to_list(to_bin(SetIdB)),
+            with_v2_set_lock(AdminId, SetId, fun() ->
+                case v2_load_leaderboard(AdminId, SetId) of
+                    {ok, Items0} ->
+                        Items1 = [I || I <- Items0, maps:get(<<"mode">>, I, <<"all">>) =:= Mode],
+                        Items = take_n(sort_leaderboard(Items1), 20),
+                        json_ok(200, #{<<"mode">> => Mode, <<"items">> => Items});
+                    {error, Reason} ->
+                        json_error(500, <<"failed_to_load_leaderboard">>, #{<<"reason">> => to_bin(Reason)})
+                end
+            end);
+        _ ->
+            json_error(404, <<"share_not_found">>, #{})
+    end.
+
+handle_v2_post_leaderboard(ShareId0, A) ->
+    case v2_load_share(ShareId0) of
+        {ok, #{<<"adminId">> := AdminIdB, <<"setId">> := SetIdB}} ->
+            AdminId = binary_to_list(to_bin(AdminIdB)),
+            SetId = binary_to_list(to_bin(SetIdB)),
+            with_v2_set_lock(AdminId, SetId, fun() ->
+                case read_json_body(A) of
+                    {ok, Body} ->
+                        Name0 = maps:get(<<"name">>, Body, undefined),
+                        Score0 = maps:get(<<"score">>, Body, undefined),
+                        Mode0 = maps:get(<<"mode">>, Body, <<"all">>),
+                        case {validate_nonempty_string(Name0), validate_score(Score0)} of
+                            {{ok, Name}, {ok, Score}} ->
+                                Mode = normalize_quiz_mode(Mode0),
+                                Now = now_rfc3339(),
+                                Item = #{
+                                    <<"name">> => Name,
+                                    <<"score">> => Score,
+                                    <<"mode">> => Mode,
+                                    <<"createdAt">> => Now
+                                },
+                                Items0 =
+                                    case v2_load_leaderboard(AdminId, SetId) of
+                                        {ok, L} when is_list(L) -> L;
+                                        _ -> []
+                                    end,
+                                Items1 = [Item | Items0],
+                                Items2 = take_n(sort_leaderboard(Items1), 200),
+                                case v2_save_leaderboard(AdminId, SetId, Items2) of
+                                    ok ->
+                                        Top = take_n([I || I <- Items2, maps:get(<<"mode">>, I, <<"all">>) =:= Mode], 20),
+                                        json_ok(201, #{<<"saved">> => true, <<"mode">> => Mode, <<"items">> => Top});
+                                    {error, Reason} ->
+                                        json_error(500, <<"failed_to_save_leaderboard">>, #{<<"reason">> => to_bin(Reason)})
+                                end;
+                            {{error, Msg}, _} ->
+                                json_error(400, <<"invalid_name">>, #{<<"details">> => Msg});
+                            {_, {error, Msg}} ->
+                                json_error(400, <<"invalid_score">>, #{<<"details">> => Msg})
+                        end;
+                    {error, Msg} ->
+                        json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+                end
+            end);
+        _ ->
+            json_error(404, <<"share_not_found">>, #{})
+    end.
+
 v2_save_set_meta(AdminId, SetId, Meta) ->
     Path = v2_set_meta_path(AdminId, SetId),
     ok = filelib:ensure_dir(Path),
@@ -878,6 +956,22 @@ v2_load_set_meta(AdminId, SetId) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+v2_load_leaderboard(AdminId, SetId) ->
+    Path = v2_leaderboard_path(AdminId, SetId),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try {ok, json_decode(Bin)} catch _:_ -> {ok, []} end;
+        {error, enoent} ->
+            {ok, []};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_save_leaderboard(AdminId, SetId, Items) ->
+    Path = v2_leaderboard_path(AdminId, SetId),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Items).
 
 v2_norm_share_id(ShareId0) ->
     case ShareId0 of
@@ -1033,6 +1127,9 @@ v2_set_dir(AdminId, SetId) ->
 
 v2_set_meta_path(AdminId, SetId) ->
     filename:join([v2_set_dir(AdminId, SetId), "meta.json"]).
+
+v2_leaderboard_path(AdminId, SetId) ->
+    filename:join([v2_set_dir(AdminId, SetId), "leaderboard.json"]).
 
 v2_sessions_dir() ->
     filename:join([v2_dir(), "sessions"]).
