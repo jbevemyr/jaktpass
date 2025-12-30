@@ -30,6 +30,21 @@ async function api(path, { method = "GET", jsonBody } = {}) {
   return body;
 }
 
+async function apiForm(path, formData, { method = "POST" } = {}) {
+  const res = await fetch(path, {
+    method,
+    body: formData,
+    credentials: "include",
+  });
+  const ct = res.headers.get("content-type") || "";
+  const body = ct.includes("application/json") ? await res.json().catch(() => null) : await res.text();
+  if (!res.ok) {
+    const err = body && body.error ? body.error : `HTTP ${res.status}`;
+    throw new Error(err);
+  }
+  return body;
+}
+
 function route() {
   const h = (location.hash || "#/admin").replace(/^#/, "");
   const parts = h.split("/").filter(Boolean);
@@ -84,6 +99,152 @@ async function ensureMe() {
 
 function setAuthedUI(authed) {
   $("#v2-nav-logout").style.display = authed ? "" : "none";
+}
+
+const v2state = {
+  selectedSetId: null,
+  moveStandId: null,
+};
+
+function normClick(img, evt) {
+  const rect = img.getBoundingClientRect();
+  const w = rect.width || 0;
+  const h = rect.height || 0;
+  if (!w || !h) return { x: null, y: null };
+  const x = (evt.clientX - rect.left) / w;
+  const y = (evt.clientY - rect.top) / h;
+  if (!isFinite(x) || !isFinite(y)) return { x: null, y: null };
+  return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+}
+
+async function fetchSet(setId) {
+  const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
+  return r?.data || null;
+}
+
+function standRow(setId, stand) {
+  const d = document.createElement("div");
+  d.className = "row";
+  d.style.justifyContent = "space-between";
+  d.style.alignItems = "center";
+  d.style.gap = "8px";
+
+  const left = document.createElement("div");
+  left.appendChild(Object.assign(document.createElement("div"), { className: "title", textContent: stand.name || "" }));
+  left.appendChild(Object.assign(document.createElement("div"), { className: "small", textContent: `x=${(stand.x ?? 0).toFixed(3)} y=${(stand.y ?? 0).toFixed(3)}` }));
+
+  const right = document.createElement("div");
+  right.className = "row";
+  right.style.gap = "8px";
+
+  const btnMove = document.createElement("button");
+  btnMove.className = "secondary";
+  btnMove.textContent = v2state.moveStandId === stand.id ? "Flyttar…" : "Flytta";
+  btnMove.addEventListener("click", async () => {
+    v2state.moveStandId = stand.id;
+    toast("Klicka på kartan för ny position.");
+    await renderAdmin();
+  });
+
+  const btnRename = document.createElement("button");
+  btnRename.className = "secondary";
+  btnRename.textContent = "Byt namn";
+  btnRename.addEventListener("click", async () => {
+    const nm = prompt("Nytt namn", stand.name || "");
+    if (!nm || !nm.trim()) return;
+    try {
+      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(stand.id)}`, { method: "PATCH", jsonBody: { name: nm.trim() } });
+      toast("Uppdaterat.");
+      await renderAdmin();
+    } catch {
+      toast("Kunde inte byta namn.");
+    }
+  });
+
+  const btnDel = document.createElement("button");
+  btnDel.className = "danger";
+  btnDel.textContent = "Radera";
+  btnDel.addEventListener("click", async () => {
+    if (!confirm("Radera pass?")) return;
+    try {
+      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(stand.id)}`, { method: "DELETE" });
+      toast("Raderat.");
+      await renderAdmin();
+    } catch {
+      toast("Kunde inte radera.");
+    }
+  });
+
+  right.appendChild(btnMove);
+  right.appendChild(btnRename);
+  right.appendChild(btnDel);
+
+  d.appendChild(left);
+  d.appendChild(right);
+  return d;
+}
+
+function renderMapEditor(meta, setId) {
+  const map = document.createElement("div");
+  map.className = "map";
+  map.style.marginTop = "12px";
+  map.style.minHeight = "0";
+
+  const imageUrl = meta?.imageUrl;
+  if (!imageUrl) {
+    map.appendChild(pSmall("Ladda upp en bild för att kunna placera pass på kartan."));
+    return map;
+  }
+
+  map.classList.add("has-image");
+  const img = document.createElement("img");
+  img.src = imageUrl;
+  img.alt = "Karta";
+  img.draggable = false;
+  map.appendChild(img);
+
+  function renderDots() {
+    [...map.querySelectorAll(".dot")].forEach((n) => n.remove());
+    (meta.stands || []).forEach((s) => {
+      const dot = document.createElement("div");
+      dot.className = "dot admin";
+      dot.style.left = `${(s.x || 0) * 100}%`;
+      dot.style.top = `${(s.y || 0) * 100}%`;
+      map.appendChild(dot);
+    });
+  }
+
+  img.addEventListener("load", renderDots);
+
+  img.addEventListener("click", async (evt) => {
+    const { x, y } = normClick(img, evt);
+    if (x == null || y == null) return;
+
+    if (v2state.moveStandId) {
+      const standId = v2state.moveStandId;
+      try {
+        await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(standId)}`, { method: "PATCH", jsonBody: { x, y } });
+        v2state.moveStandId = null;
+        toast("Flyttat.");
+        await renderAdmin();
+      } catch {
+        toast("Kunde inte flytta.");
+      }
+      return;
+    }
+
+    const name = prompt("Passnamn", "");
+    if (!name || !name.trim()) return;
+    try {
+      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: name.trim(), x, y } });
+      toast("Skapat.");
+      await renderAdmin();
+    } catch {
+      toast("Kunde inte skapa pass.");
+    }
+  });
+
+  return map;
 }
 
 async function renderLogin() {
@@ -240,6 +401,86 @@ async function renderAdmin() {
   }
   if (!sets.length) wrap.appendChild(pSmall("Inga set ännu."));
   else sets.forEach((s) => wrap.appendChild(setRow(s)));
+
+  // ---- Redigera set: bild + pass ----
+  if (sets.length) {
+    if (!v2state.selectedSetId) v2state.selectedSetId = sets[0].id;
+
+    const sec = document.createElement("div");
+    sec.style.marginTop = "14px";
+    sec.appendChild(h2("Bild & pass"));
+
+    const sel = document.createElement("select");
+    sets.forEach((s) => {
+      const o = document.createElement("option");
+      o.value = s.id;
+      o.textContent = s.name;
+      sel.appendChild(o);
+    });
+    sel.value = v2state.selectedSetId;
+    sel.addEventListener("change", async () => {
+      v2state.selectedSetId = sel.value;
+      v2state.moveStandId = null;
+      await renderAdmin();
+    });
+    sec.appendChild(row([label("Välj set", sel)]));
+
+    let meta = null;
+    try {
+      meta = await fetchSet(v2state.selectedSetId);
+    } catch {
+      meta = null;
+    }
+
+    const up = document.createElement("div");
+    up.className = "row";
+    up.style.gap = "8px";
+    up.style.alignItems = "center";
+    const file = document.createElement("input");
+    file.type = "file";
+    file.accept = "image/png,image/jpeg,image/webp";
+    const btnUp = document.createElement("button");
+    btnUp.textContent = "Ladda upp bild";
+    btnUp.addEventListener("click", async () => {
+      const f = file.files && file.files[0];
+      if (!f) return toast("Välj en bildfil.");
+      const fd = new FormData();
+      fd.append("file", f, f.name);
+      try {
+        await apiForm(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/image`, fd);
+        toast("Uppladdat.");
+        await renderAdmin();
+      } catch {
+        toast("Kunde inte ladda upp.");
+      }
+    });
+    const btnCancelMove = document.createElement("button");
+    btnCancelMove.className = "secondary";
+    btnCancelMove.textContent = "Avbryt flytt";
+    btnCancelMove.style.display = v2state.moveStandId ? "" : "none";
+    btnCancelMove.addEventListener("click", async () => {
+      v2state.moveStandId = null;
+      toast("Avbrutet.");
+      await renderAdmin();
+    });
+    up.appendChild(file);
+    up.appendChild(btnUp);
+    up.appendChild(btnCancelMove);
+    sec.appendChild(up);
+
+    if (meta) {
+      sec.appendChild(renderMapEditor(meta, v2state.selectedSetId));
+
+      const stands = meta.stands || [];
+      sec.appendChild(h2(`Pass (${stands.length})`));
+      if (!stands.length) sec.appendChild(pSmall("Inga pass ännu. Klicka på kartan för att skapa."));
+      else stands.forEach((s) => sec.appendChild(standRow(v2state.selectedSetId, s)));
+    } else {
+      sec.appendChild(pSmall("Kunde inte läsa set-data."));
+    }
+
+    wrap.appendChild(sec);
+  }
 
   render(wrap);
 }

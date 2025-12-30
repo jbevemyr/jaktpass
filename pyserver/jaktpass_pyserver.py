@@ -837,6 +837,112 @@ class Handler(BaseHTTPRequestHandler):
                         v2_save_set_meta(admin_id, set_id, meta)
                         return self._ok({"id": set_id, "shareId": share_id, "shareUrl": f"/v2/#/quiz/{share_id}"}, code=201)
 
+                    if method == "GET" and len(v2) == 2 and v2[0] == "sets":
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        except Exception as e:
+                            return self._err(500, "failed_to_load_set", {"error": str(e)})
+                        share_id = meta.get("shareId")
+                        img = (meta.get("image") or {}).get("filename")
+                        meta["imageUrl"] = (f"/api/v2/media/shares/{share_id}/image" if (share_id and img) else None)
+                        return self._ok(meta)
+
+                    if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "image":
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        parts = self._read_multipart()
+                        if not parts or "file" not in parts:
+                            return self._err(400, "invalid_multipart", {"details": "missing file"})
+                        filename, data = parts["file"]
+                        ext = image_ext(filename or "")
+                        if not ext:
+                            return self._err(400, "invalid_image_extension", {"allowed": ["png", "jpg", "jpeg", "webp"]})
+                        out_name = f"image.{ext}"
+                        out_path = v2_set_dir(admin_id, set_id) / out_name
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        out_path.write_bytes(data)
+                        w, h = image_dims(ext, data)
+                        meta["image"] = {"filename": out_name, "width": w, "height": h, "uploadedAt": now_rfc3339()}
+                        v2_save_set_meta(admin_id, set_id, meta)
+                        return self._ok(meta["image"])
+
+                    if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "stands":
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        body = self._read_json_body()
+                        if body is None:
+                            return self._err(400, "invalid_json", {})
+                        name = validate_nonempty_string(body.get("name"))
+                        x = clamp01(body.get("x"))
+                        y = clamp01(body.get("y"))
+                        note = body.get("note")
+                        if not name or x is None or y is None:
+                            return self._err(400, "invalid_payload", {"expected": "name + x + y (0..1)"})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        now = now_rfc3339()
+                        stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "createdAt": now, "updatedAt": now}
+                        if note is not None:
+                            stand["note"] = str(note)
+                        meta["stands"] = [stand] + (meta.get("stands") or [])
+                        v2_save_set_meta(admin_id, set_id, meta)
+                        return self._ok(stand, code=201)
+
+                    if method in ("PATCH", "DELETE") and len(v2) == 4 and v2[0] == "sets" and v2[2] == "stands":
+                        set_id = unquote(v2[1])
+                        stand_id = unquote(v2[3])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        stands = meta.get("stands") or []
+                        found, rest = split_by_id(stands, stand_id)
+                        if not found:
+                            return self._err(404, "not_found", {"id": stand_id})
+                        if method == "DELETE":
+                            meta["stands"] = rest
+                            v2_save_set_meta(admin_id, set_id, meta)
+                            return self._ok({"deleted": True})
+                        body = self._read_json_body()
+                        if body is None:
+                            return self._err(400, "invalid_json", {})
+                        if "name" in body:
+                            nm2 = validate_nonempty_string(body.get("name"))
+                            if not nm2:
+                                return self._err(400, "invalid_payload", {"details": "name: invalid"})
+                            found["name"] = nm2
+                        if "x" in body:
+                            xv = clamp01(body.get("x"))
+                            if xv is None:
+                                return self._err(400, "invalid_payload", {"details": "x: out_of_range"})
+                            found["x"] = xv
+                        if "y" in body:
+                            yv = clamp01(body.get("y"))
+                            if yv is None:
+                                return self._err(400, "invalid_payload", {"details": "y: out_of_range"})
+                            found["y"] = yv
+                        if "note" in body:
+                            found["note"] = str(body.get("note") or "")
+                        found["updatedAt"] = now_rfc3339()
+                        meta["stands"] = [found] + rest
+                        v2_save_set_meta(admin_id, set_id, meta)
+                        return self._ok(found)
+
                     if method == "POST" and len(v2) == 3 and v2[2] == "share":
                         set_id = unquote(v2[1])
                         if not validate_set_id(set_id):
