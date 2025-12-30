@@ -1428,8 +1428,9 @@ pick_file_part_yaws_events([{head, Head0} | Rest], FieldName, Collecting, Filena
                         {PN1, _} when is_list(PN1) ->
                             case normalize_field_name(PN1) =:= Want of
                                 true ->
-                                    multipart_dbg("yaws head matched via __yaws_part_name field=~p", [FieldName]),
-                                    pick_file_part_yaws_events(Rest, FieldName, true, "upload.bin", []);
+                                    FN0 = yaws_filename_from_hdrs(Hdrs),
+                                    multipart_dbg("yaws head matched via __yaws_part_name field=~p filename=~p", [FieldName, FN0]),
+                                    pick_file_part_yaws_events(Rest, FieldName, true, FN0, []);
                                 false ->
                                     pick_file_part_yaws_events_match_head_value(Rest, FieldName, Head0, V)
                             end;
@@ -1455,6 +1456,7 @@ pick_file_part_yaws_events([_Other | Rest], FieldName, Collecting, Filename, Bod
 pick_file_part_yaws_events_match_head_value(Rest, FieldName, Head0, V) ->
     case V =/= undefined of
         true ->
+            %% Gissa filnamn från head-värdet (om möjligt), annars fall back.
             FN2 = yaws_guess_filename(V),
             multipart_dbg("yaws head matched via head-key field=~p filename=~p", [FieldName, FN2]),
             pick_file_part_yaws_events(Rest, FieldName, true, FN2, []);
@@ -1506,6 +1508,22 @@ yaws_guess_filename(V) ->
         _ ->
             "upload.bin"
     end.
+
+yaws_filename_from_hdrs(Hdrs) when is_map(Hdrs) ->
+    %% Yaws 2.0.8 event-head kan innehålla filename/name/content-type som redan-parsade fält.
+    FN0 = maps:get("filename", Hdrs, ""),
+    FN = case FN0 of
+             B when is_binary(B) -> binary_to_list(B);
+             L when is_list(L) -> L;
+             A when is_atom(A) -> atom_to_list(A);
+             _ -> ""
+         end,
+    case string:trim(FN) of
+        "" -> "upload.bin";
+        S -> S
+    end;
+yaws_filename_from_hdrs(_Other) ->
+    "upload.bin".
 
 v_to_list(B) when is_binary(B) -> binary_to_list(B);
 v_to_list(L) when is_list(L) -> L;
