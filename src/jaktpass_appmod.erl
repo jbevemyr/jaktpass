@@ -17,6 +17,9 @@ stop() -> ok.
 %% OTP 22: använd lokal header (incheckad i repo) istället för include_lib(...)
 -include("yaws_api.hrl").
 
+%% Multipart continuation state (Yaws parse_multipart_post/1)
+-record(mp_state, {count = 0, acc = []}).
+
 %%====================================================================
 %% Entry
 %%====================================================================
@@ -297,11 +300,15 @@ handle_delete_admin_set(SetId) ->
     end).
 
 handle_post_admin_set_image(SetId, A) ->
-    with_set_lock(SetId, fun() ->
-        case load_set_meta(SetId) of
-            {ok, Meta0} ->
-                case parse_multipart_file(A, "file") of
-                    {ok, #{filename := OrigName, data := Bin}} ->
+    %% Viktigt: multipart kan komma som continuation i Yaws.
+    %% Vi kan inte hålla set-lock över flera get_more-roundtrips.
+    case parse_multipart_file(A, "file") of
+        {get_more, Cont, PState} ->
+            {get_more, Cont, PState};
+        {ok, #{filename := OrigName, data := Bin}} ->
+            with_set_lock(SetId, fun() ->
+                case load_set_meta(SetId) of
+                    {ok, Meta0} ->
                         case image_ext(OrigName) of
                             {ok, Ext} ->
                                 Filename = "image." ++ Ext,
@@ -324,15 +331,15 @@ handle_post_admin_set_image(SetId, A) ->
                             {error, invalid_ext} ->
                                 json_error(400, <<"invalid_image_extension">>, #{<<"allowed">> => [<<"png">>,<<"jpg">>,<<"jpeg">>,<<"webp">>]})
                         end;
-                    {error, Msg} ->
-                        json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
-                end;
-            {error, enoent} ->
-                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
-            {error, Reason} ->
-                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
-        end
-    end).
+                    {error, enoent} ->
+                        json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+                    {error, Reason} ->
+                        json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+                end
+            end);
+        {error, Msg} ->
+            json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
+    end.
 
 handle_post_admin_set_stands(SetId, A) ->
     with_set_lock(SetId, fun() ->
@@ -625,12 +632,15 @@ handle_v2_get_set(Admin, SetId) ->
     end).
 
 handle_v2_post_set_image(Admin, SetId, A) ->
-    AdminId = v2_admin_id(Admin),
-    with_v2_set_lock(AdminId, SetId, fun() ->
-        case v2_load_set_meta(AdminId, SetId) of
-            {ok, Meta0} ->
-                case parse_multipart_file(A, "file") of
-                    {ok, #{filename := OrigName, data := Bin}} ->
+    %% Multipart kan komma som continuation i Yaws (get_more).
+    case parse_multipart_file(A, "file") of
+        {get_more, Cont, PState} ->
+            {get_more, Cont, PState};
+        {ok, #{filename := OrigName, data := Bin}} ->
+            AdminId = v2_admin_id(Admin),
+            with_v2_set_lock(AdminId, SetId, fun() ->
+                case v2_load_set_meta(AdminId, SetId) of
+                    {ok, Meta0} ->
                         case image_ext(OrigName) of
                             {ok, Ext} ->
                                 Filename = "image." ++ Ext,
@@ -653,15 +663,15 @@ handle_v2_post_set_image(Admin, SetId, A) ->
                             {error, invalid_ext} ->
                                 json_error(400, <<"invalid_image_extension">>, #{<<"allowed">> => [<<"png">>,<<"jpg">>,<<"jpeg">>,<<"webp">>]})
                         end;
-                    {error, Msg} ->
-                        json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
-                end;
-            {error, enoent} ->
-                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
-            {error, Reason} ->
-                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
-        end
-    end).
+                    {error, enoent} ->
+                        json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+                    {error, Reason} ->
+                        json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+                end
+            end);
+        {error, Msg} ->
+            json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
+    end.
 
 handle_v2_post_set_stands(Admin, SetId, A) ->
     AdminId = v2_admin_id(Admin),
@@ -1266,22 +1276,38 @@ parse_multipart_file(A, FieldName) ->
     multipart_dbg("clidata=~p cont=~p", [A#arg.clidata, A#arg.cont]),
 
     %% Försök först med Yaws inbyggda multipart-parser (om den finns).
-    %% I vissa Yaws-versioner är request-body inte tillgänglig via recv_body/clidata för appmods,
-    %% men parse_multipart_post/1 fungerar.
+    %% OBS: Den kan returnera continuation: {cont, Cont, Res} och kräver {get_more, Cont, State}.
     case erlang:function_exported(yaws_api, parse_multipart_post, 1) of
         true ->
-            case (catch yaws_api:parse_multipart_post(A)) of
+            case yaws_api:parse_multipart_post(A) of
+                [] ->
+                    {error, <<"broken_post">>};
+                {cont, Cont, Res} ->
+                    P0 = case A#arg.state of
+                             S when is_record(S, mp_state) -> S;
+                             _ -> #mp_state{}
+                         end,
+                    New = P0#mp_state{count = P0#mp_state.count + 1,
+                                      acc = P0#mp_state.acc ++ Res},
+                    multipart_dbg("yaws cont count=~p parts=~p", [New#mp_state.count, length(New#mp_state.acc)]),
+                    {get_more, Cont, New};
+                {result, Res} ->
+                    P0 = case A#arg.state of
+                             S when is_record(S, mp_state) -> S;
+                             _ -> #mp_state{}
+                         end,
+                    Parts = P0#mp_state.acc ++ Res,
+                    case pick_file_part_yaws(Parts, FieldName) of
+                        {ok, File} -> {ok, File};
+                        _ -> {error, <<"missing_file_field">>}
+                    end;
                 Parts when is_list(Parts) ->
                     case pick_file_part_yaws(Parts, FieldName) of
-                        {ok, File} ->
-                            multipart_dbg("yaws_api:parse_multipart_post ok", []),
-                            {ok, File};
-                        _ ->
-                            multipart_dbg("yaws_api:parse_multipart_post returned but no file field", []),
-                            parse_multipart_file_manual(A, FieldName, CT0)
+                        {ok, File} -> {ok, File};
+                        _ -> {error, <<"missing_file_field">>}
                     end;
-                _Other ->
-                    multipart_dbg("yaws_api:parse_multipart_post failed/unsupported (~p)", [_Other]),
+                Other ->
+                    multipart_dbg("yaws_api:parse_multipart_post unexpected=~p", [Other]),
                     parse_multipart_file_manual(A, FieldName, CT0)
             end;
         false ->
