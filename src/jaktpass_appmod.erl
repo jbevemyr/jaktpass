@@ -1263,6 +1263,32 @@ parse_multipart_file(A, FieldName) ->
     %% Läser hela body som binär och plockar ut fältet "file".
     CT0 = header_value(A#arg.headers, "content-type"),
     multipart_dbg("content-type=~p", [CT0]),
+    multipart_dbg("clidata=~p cont=~p", [A#arg.clidata, A#arg.cont]),
+
+    %% Försök först med Yaws inbyggda multipart-parser (om den finns).
+    %% I vissa Yaws-versioner är request-body inte tillgänglig via recv_body/clidata för appmods,
+    %% men parse_multipart_post/1 fungerar.
+    case erlang:function_exported(yaws_api, parse_multipart_post, 1) of
+        true ->
+            case (catch yaws_api:parse_multipart_post(A)) of
+                Parts when is_list(Parts) ->
+                    case pick_file_part_yaws(Parts, FieldName) of
+                        {ok, File} ->
+                            multipart_dbg("yaws_api:parse_multipart_post ok", []),
+                            {ok, File};
+                        _ ->
+                            multipart_dbg("yaws_api:parse_multipart_post returned but no file field", []),
+                            parse_multipart_file_manual(A, FieldName, CT0)
+                    end;
+                _Other ->
+                    multipart_dbg("yaws_api:parse_multipart_post failed/unsupported (~p)", [_Other]),
+                    parse_multipart_file_manual(A, FieldName, CT0)
+            end;
+        false ->
+            parse_multipart_file_manual(A, FieldName, CT0)
+    end.
+
+parse_multipart_file_manual(A, FieldName, CT0) ->
     case multipart_boundary(CT0) of
         {ok, Boundary} ->
             multipart_dbg("boundary=~p", [Boundary]),
@@ -1282,6 +1308,20 @@ parse_multipart_file(A, FieldName) ->
             end;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+pick_file_part_yaws([], _FieldName) ->
+    {error, missing};
+pick_file_part_yaws([P | Rest], FieldName) ->
+    case P of
+        {FieldName, {Filename, _CT, Bin}} ->
+            {ok, #{filename => Filename, data => Bin}};
+        {FieldName, {Filename, _CT, _Charset, Bin}} ->
+            {ok, #{filename => Filename, data => Bin}};
+        {FieldName, {Filename, _CT, Bin, _}} ->
+            {ok, #{filename => Filename, data => Bin}};
+        {_Other, _} ->
+            pick_file_part_yaws(Rest, FieldName)
     end.
 
 header_value(H, NameLower) when is_record(H, headers) ->
