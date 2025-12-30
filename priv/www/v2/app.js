@@ -519,19 +519,62 @@ async function renderQuiz(shareId) {
       const pack = r?.data;
       const setName = pack?.set?.name || "Quiz";
       wrap.querySelector("h2").textContent = `${setName} – Quiz`;
-      q.textContent = `Frågor: ${(pack.questions || []).length}`;
-      // Rendera karta + prickar (enkel visning, v1-quiz logik återkommer när vi bygger vidare)
+      const questions = pack?.questions || [];
+      const visible = pack?.visibleStands || [];
+      const nameById = {};
+      questions.forEach((it) => { nameById[it.standId] = it.name; });
+
+      let idx = 0;
+      const solved = new Set();
+
+      function setQuestionText() {
+        if (!questions.length) {
+          q.textContent = "Inga pass i detta set.";
+          return;
+        }
+        if (idx >= questions.length) {
+          q.textContent = "Klart!";
+          toast("Quiz klart.");
+          return;
+        }
+        const cur = questions[idx];
+        q.textContent = `Hitta: ${cur.name} (${idx + 1}/${questions.length})`;
+      }
+
+      // Rendera karta + prickar (minimal quiz-loop)
       map.innerHTML = "";
+      map.classList.add("has-image");
       const img = document.createElement("img");
       img.src = pack.imageUrl;
       map.appendChild(img);
-      (pack.visibleStands || []).forEach((s) => {
+      visible.forEach((s) => {
         const d = document.createElement("div");
-        d.className = "dot";
+        d.className = "dot quiz";
+        d.dataset.id = s.id;
         d.style.left = `${s.x * 100}%`;
         d.style.top = `${s.y * 100}%`;
+        d.addEventListener("click", () => {
+          if (!questions.length) return;
+          if (idx >= questions.length) return;
+          const want = questions[idx].standId;
+          const got = s.id;
+          if (got === want) {
+            solved.add(got);
+            d.classList.add("correct1");
+            idx += 1;
+            setQuestionText();
+          } else {
+            toast(`Fel: ${(nameById[got] || "pass")}`);
+          }
+        });
         map.appendChild(d);
       });
+      // Markera redan lösta om vi re-renderar av nån anledning
+      [...map.querySelectorAll(".dot")].forEach((el) => {
+        const id = el.dataset.id;
+        if (solved.has(id)) el.classList.add("correct1");
+      });
+      setQuestionText();
     } catch {
       toast("Kunde inte starta quiz.");
     }
