@@ -1411,20 +1411,36 @@ multipart_cd_param(CD0, Key) ->
              B when is_binary(B) -> binary_to_list(B);
              L when is_list(L) -> L
          end,
-    %% key="value" eller key=value
-    Re = Key ++ "=\"([^\"]*)\"|" ++ Key ++ "=([^;\\s]+)",
-    case re:run(CD, Re, [{capture, [1,2], list}]) of
-        {match, [V1, V2]} ->
-            strip_dquotes(select_cd_value(V1, V2));
-        _ ->
-            ""
-    end.
+    %% Robust (OTP22): parsa Content-Disposition som key=value-parametrar
+    %% Ex: form-data; name="file"; filename="x.jpg"
+    KeyLower = string:lowercase(Key),
+    Params = parse_cd_params(CD),
+    maps:get(KeyLower, Params, "").
 
-select_cd_value(undefined, undefined) -> "";
-select_cd_value("", V2) when V2 =/= undefined -> V2;
-select_cd_value(V1, _V2) when V1 =/= undefined, V1 =/= "" -> V1;
-select_cd_value(_V1, V2) when V2 =/= undefined -> V2;
-select_cd_value(_, _) -> "".
+parse_cd_params(CD0) ->
+    CD = case CD0 of
+             B when is_binary(B) -> binary_to_list(B);
+             L when is_list(L) -> L
+         end,
+    Parts = [string:trim(P) || P <- string:tokens(CD, ";")],
+    lists:foldl(
+      fun(P, Acc) ->
+          case string:chr(P, $=) of
+              0 ->
+                  Acc;
+              _ ->
+                  case string:tokens(P, "=") of
+                      [K | Vs] ->
+                          V0 = string:trim(string:join(Vs, "=")),
+                          V1 = strip_dquotes(V0),
+                          Acc#{string:lowercase(string:trim(K)) => V1};
+                      _ ->
+                          Acc
+                  end
+          end
+      end,
+      #{},
+      Parts).
 
 image_ext(OrigName0) ->
     OrigName =
