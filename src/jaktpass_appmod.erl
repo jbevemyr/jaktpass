@@ -1314,11 +1314,27 @@ multipart_boundary(CT0) ->
     %% Ex: multipart/form-data; boundary=----WebKitFormBoundary...
     case re:run(CT, "boundary=([^;\\s]+)", [{capture, [1], list}]) of
         {match, [B0]} ->
-            B1 = string:trim(B0, both, $"),
+            %% OTP22-safe: boundary kan ibland vara "...." (med citationstecken)
+            B1 = strip_dquotes(B0),
             {ok, B1};
         _ ->
             {error, <<"invalid_multipart_content_type">>}
     end.
+
+strip_dquotes(S) when is_list(S) ->
+    case S of
+        [$\" | _] ->
+            case lists:reverse(S) of
+                [$\" | RevRest] -> lists:reverse(RevRest);
+                _ -> S
+            end;
+        _ ->
+            S
+    end;
+strip_dquotes(B) when is_binary(B) ->
+    strip_dquotes(binary_to_list(B));
+strip_dquotes(Other) ->
+    to_bin(Other).
 
 multipart_find_file(Bin, Boundary, FieldName) when is_binary(Bin), is_list(Boundary) ->
     Delim = list_to_binary(["--", Boundary]),
