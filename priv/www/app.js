@@ -724,7 +724,7 @@ async function refreshAdminMeta() {
 function renderQuizPack(meta, pack) {
   const total = (pack.questions || []).length;
   $("#quiz-progress").textContent = `${state.quiz.idx}/${total}`;
-  $("#quiz-question").textContent = state.quiz.current ? state.quiz.current.name : "-";
+  $("#quiz-question").textContent = state.quiz.current ? displayStandName(state.quiz.current.name) : "-";
   updateScore();
 
   const visibleById = {};
@@ -752,7 +752,7 @@ function renderQuizPack(meta, pack) {
         if (state.quiz.revealActive && state.quiz.revealId === wantId) {
           state.quiz.dotStates[wantId] = "reveal";
           state.quiz.labelsPersistent[wantId] =
-            state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId;
+            displayStandName(state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId);
           state.quiz.revealActive = false;
           state.quiz.revealId = null;
           state.quiz.attempts = 0;
@@ -767,7 +767,7 @@ function renderQuizPack(meta, pack) {
         else state.quiz.dotStates[wantId] = "correct3";
 
         state.quiz.labelsPersistent[wantId] =
-          state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId;
+          displayStandName(state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId);
 
         state.quiz.attempts = 0;
         advanceQuiz();
@@ -793,7 +793,7 @@ function renderQuizPack(meta, pack) {
         state.quiz.revealId = wantId;
         state.quiz.dotStates[wantId] = "revealBlink";
         state.quiz.labelsPersistent[wantId] =
-          state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId;
+          displayStandName(state.quiz.current?.name || state.quiz.standNameById?.[wantId] || wantId);
         renderQuizPack(state.quiz.meta, state.quiz.pack);
       }
     },
@@ -805,7 +805,7 @@ function renderQuizPack(meta, pack) {
 }
 
 function showTempLabel(standId, x, y) {
-  const name = state.quiz.standNameById?.[standId] || standId;
+  const name = displayStandName(state.quiz.standNameById?.[standId] || standId);
   const container = $("#quiz-map");
   const n = el("div", { class: "map-label temp", text: name });
   n.style.left = `${x * 100}%`;
@@ -829,7 +829,7 @@ function advanceQuiz() {
   state.quiz.current = q[state.quiz.idx];
   state.quiz.idx += 1;
   $("#quiz-progress").textContent = `${state.quiz.idx}/${q.length}`;
-  $("#quiz-question").textContent = state.quiz.current.name;
+  $("#quiz-question").textContent = displayStandName(state.quiz.current.name);
   updateScore();
 }
 
