@@ -1389,8 +1389,9 @@ part_is_field(Hdrs, FieldName) ->
         undefined -> false;
         CD ->
             %% Ex: form-data; name="file"; filename="x.png"
-            Name = multipart_cd_param(CD, "name"),
-            case Name =:= FieldName of
+            Name = normalize_fieldname(multipart_cd_param(CD, "name")),
+            Want = normalize_fieldname(FieldName),
+            case Name =:= Want of
                 true ->
                     Filename0 = multipart_cd_param(CD, "filename"),
                     Filename = case Filename0 of "" -> "upload.bin"; _ -> Filename0 end,
@@ -1400,6 +1401,11 @@ part_is_field(Hdrs, FieldName) ->
             end
     end.
 
+normalize_fieldname(undefined) -> "";
+normalize_fieldname(B) when is_binary(B) -> normalize_fieldname(binary_to_list(B));
+normalize_fieldname(L) when is_list(L) -> string:lowercase(string:trim(L));
+normalize_fieldname(_) -> "".
+
 multipart_cd_param(CD0, Key) ->
     CD = case CD0 of
              B when is_binary(B) -> binary_to_list(B);
@@ -1407,13 +1413,18 @@ multipart_cd_param(CD0, Key) ->
          end,
     %% key="value" eller key=value
     Re = Key ++ "=\"([^\"]*)\"|" ++ Key ++ "=([^;\\s]+)",
-    case re:run(CD, Re, [{capture, all, list}]) of
-        {match, [_All, V1, V2]} ->
-            V = case V1 of "" -> V2; _ -> V1 end,
-            string:trim(V, both, $");
+    case re:run(CD, Re, [{capture, [1,2], list}]) of
+        {match, [V1, V2]} ->
+            strip_dquotes(select_cd_value(V1, V2));
         _ ->
             ""
     end.
+
+select_cd_value(undefined, undefined) -> "";
+select_cd_value("", V2) when V2 =/= undefined -> V2;
+select_cd_value(V1, _V2) when V1 =/= undefined, V1 =/= "" -> V1;
+select_cd_value(_V1, V2) when V2 =/= undefined -> V2;
+select_cd_value(_, _) -> "".
 
 image_ext(OrigName0) ->
     OrigName =
