@@ -1351,9 +1351,19 @@ parse_multipart_file_manual(A, FieldName, CT0) ->
             {error, Reason}
     end.
 
-pick_file_part_yaws([], _FieldName) ->
+pick_file_part_yaws(Parts, FieldName) when is_list(Parts) ->
+    %% Yaws kan returnera antingen:
+    %% 1) "Färdiga" parts: {file, {Filename, CT, Bin}}
+    %% 2) En event-ström: {head, ...}, {part_body, ...}, ...
+    case Parts of
+        [{head, _} | _] -> pick_file_part_yaws_events(Parts, FieldName);
+        [{part_body, _} | _] -> pick_file_part_yaws_events(Parts, FieldName);
+        _ -> pick_file_part_yaws_kv(Parts, FieldName)
+    end.
+
+pick_file_part_yaws_kv([], _FieldName) ->
     {error, missing};
-pick_file_part_yaws([P | Rest], FieldName) ->
+pick_file_part_yaws_kv([P | Rest], FieldName) ->
     Want = normalize_field_name(FieldName),
     case P of
         {K, V} ->
@@ -1363,22 +1373,93 @@ pick_file_part_yaws([P | Rest], FieldName) ->
                         {Filename, _CT, Body0} ->
                             case yaws_body_bin(Body0) of
                                 {ok, Body} -> {ok, #{filename => Filename, data => Body}};
-                                error -> pick_file_part_yaws(Rest, FieldName)
+                                error -> pick_file_part_yaws_kv(Rest, FieldName)
                             end;
                         {Filename, _CT, _Charset, Body0} ->
                             case yaws_body_bin(Body0) of
                                 {ok, Body} -> {ok, #{filename => Filename, data => Body}};
-                                error -> pick_file_part_yaws(Rest, FieldName)
+                                error -> pick_file_part_yaws_kv(Rest, FieldName)
                             end;
                         _ ->
-                            pick_file_part_yaws(Rest, FieldName)
+                            pick_file_part_yaws_kv(Rest, FieldName)
                     end;
                 false ->
-                    pick_file_part_yaws(Rest, FieldName)
+                    pick_file_part_yaws_kv(Rest, FieldName)
             end;
         _ ->
-            pick_file_part_yaws(Rest, FieldName)
+            pick_file_part_yaws_kv(Rest, FieldName)
     end.
+
+pick_file_part_yaws_events(Events, FieldName) ->
+    %% Tolkning av event-ström från yaws_api:parse_multipart_post/1 (Yaws 2.0.8).
+    %% Vi letar efter en part där Content-Disposition har name="file" och samlar part_body tills nästa head.
+    pick_file_part_yaws_events(Events, FieldName, false, "upload.bin", []).
+
+pick_file_part_yaws_events([], _FieldName, true, Filename, BodyAcc) ->
+    %% EOF medan vi samlar: returnera det vi har.
+    {ok, #{filename => Filename, data => iolist_to_binary(lists:reverse(BodyAcc))}};
+pick_file_part_yaws_events([], _FieldName, false, _Filename, _BodyAcc) ->
+    {error, missing};
+pick_file_part_yaws_events([{head, Head0} | Rest], FieldName, Collecting, Filename, BodyAcc) ->
+    %% Ny head -> om vi redan samlade så är förra parten klar.
+    case Collecting of
+        true ->
+            {ok, #{filename => Filename, data => iolist_to_binary(lists:reverse(BodyAcc))}};
+        false ->
+            Hdrs = yaws_head_to_hdrmap(Head0),
+            case part_is_field(Hdrs, FieldName) of
+                {true, FN} ->
+                    pick_file_part_yaws_events(Rest, FieldName, true, FN, []);
+                false ->
+                    pick_file_part_yaws_events(Rest, FieldName, false, "upload.bin", [])
+            end
+    end;
+pick_file_part_yaws_events([{part_body, Chunk0} | Rest], FieldName, Collecting, Filename, BodyAcc) ->
+    case Collecting of
+        true ->
+            %% Chunk kan vara bin eller list/iodata
+            pick_file_part_yaws_events(Rest, FieldName, true, Filename, [Chunk0 | BodyAcc]);
+        false ->
+            pick_file_part_yaws_events(Rest, FieldName, false, Filename, BodyAcc)
+    end;
+pick_file_part_yaws_events([_Other | Rest], FieldName, Collecting, Filename, BodyAcc) ->
+    pick_file_part_yaws_events(Rest, FieldName, Collecting, Filename, BodyAcc).
+
+yaws_head_to_hdrmap(H) when is_binary(H) ->
+    %% Kan vara rå header-block som binär
+    parse_part_headers(binary_to_list(H));
+yaws_head_to_hdrmap(H) when is_list(H) ->
+    case H of
+        [] -> #{};
+        [I | _] when is_integer(I) ->
+            %% Charlist header-block
+            parse_part_headers(H);
+        _ ->
+            %% Lista med header-tupler (eller http_header-tupler)
+            lists:foldl(
+              fun(E, Acc) ->
+                  case E of
+                      {http_header, _I, Name, _Reserved, Val} ->
+                          Acc#{string:lowercase(string:trim(v_to_list(Name))) => string:trim(v_to_list(Val))};
+                      {K, V} ->
+                          Acc#{string:lowercase(string:trim(v_to_list(K))) => string:trim(v_to_list(V))};
+                      _ ->
+                          Acc
+                  end
+              end,
+              #{},
+              H)
+    end;
+yaws_head_to_hdrmap({Hdrs, _Other}) ->
+    yaws_head_to_hdrmap(Hdrs);
+yaws_head_to_hdrmap(_Other) ->
+    #{}.
+
+v_to_list(B) when is_binary(B) -> binary_to_list(B);
+v_to_list(L) when is_list(L) -> L;
+v_to_list(A) when is_atom(A) -> atom_to_list(A);
+v_to_list(I) when is_integer(I) -> integer_to_list(I);
+v_to_list(T) -> io_lib:format("~p", [T]).
 
 normalize_field_name(V) when is_atom(V) ->
     normalize_field_name(atom_to_list(V));
