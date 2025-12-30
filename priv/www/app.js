@@ -68,6 +68,13 @@ function setTopNavVisibility(view) {
   // När man delar /quiz ska användare inte se några spår av admin (tabs + logout).
   const tabs = document.querySelector("header.top .tabs");
   if (tabs) tabs.style.display = view === "quiz" ? "none" : "";
+  const brand = document.querySelector("#brand");
+  if (brand) brand.style.display = view === "quiz" ? "none" : "";
+}
+
+function setQuizTitle(text) {
+  const el = document.querySelector("#quiz-title");
+  if (el) el.textContent = text || "Quiz";
 }
 
 function viewFromPath(pathname) {
@@ -290,6 +297,7 @@ function setQuizMode(mode) {
 function showQuizHome() {
   $("#quiz-home") && ($("#quiz-home").style.display = "");
   $("#quiz-play") && ($("#quiz-play").style.display = "none");
+  setQuizTitle("Quiz");
 }
 
 function showQuizPlay() {
@@ -870,6 +878,7 @@ async function startQuiz(setId) {
   qs.set("mode", mode);
 
   const meta = await loadSetMeta(setId);
+  setQuizTitle(`${meta?.set?.name || "Quiz"} \u2013 Quiz`);
   const r = await api(`/api/sets/${encodeURIComponent(setId)}/quiz?${qs.toString()}`);
   const pack = r.data;
   state.quiz.pack = pack;
