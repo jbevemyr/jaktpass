@@ -17,6 +17,7 @@ import argparse
 import base64
 import datetime as dt
 import email
+import hashlib
 import io
 import json
 import mimetypes
