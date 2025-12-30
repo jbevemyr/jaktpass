@@ -70,6 +70,40 @@ dispatch('PATCH', ["admin", "stands", StandId], A) ->
 dispatch('DELETE', ["admin", "stands", StandId], A) ->
     with_admin(A, fun() -> handle_delete_admin_stand(StandId) end);
 
+%% V2 (multi-admin) - separat namespace under /api/v2/*
+dispatch('POST', ["v2", "register"], A) ->
+    handle_v2_register(A);
+dispatch('POST', ["v2", "login"], A) ->
+    handle_v2_login(A);
+dispatch('POST', ["v2", "logout"], A) ->
+    handle_v2_logout(A);
+dispatch('GET', ["v2", "me"], A) ->
+    handle_v2_me(A);
+
+%% V2 admin-protected (session cookie)
+dispatch('GET', ["v2", "sets"], A) ->
+    with_v2_admin(A, fun(Admin) -> handle_v2_get_sets(Admin) end);
+dispatch('POST', ["v2", "sets"], A) ->
+    with_v2_admin(A, fun(Admin) -> handle_v2_post_sets(Admin, A) end);
+dispatch('GET', ["v2", "sets", SetId], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_get_set(Admin, SId) end) end);
+dispatch('POST', ["v2", "sets", SetId, "image"], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_set_image(Admin, SId, A) end) end);
+dispatch('POST', ["v2", "sets", SetId, "stands"], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_set_stands(Admin, SId, A) end) end);
+dispatch('PATCH', ["v2", "sets", SetId, "stands", StandId], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_patch_stand(Admin, SId, StandId, A) end) end);
+dispatch('DELETE', ["v2", "sets", SetId, "stands", StandId], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_delete_stand(Admin, SId, StandId) end) end);
+dispatch('POST', ["v2", "sets", SetId, "share"], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_share(Admin, SId) end) end);
+
+%% V2 public (share token)
+dispatch('GET', ["v2", "quiz", ShareId], A) ->
+    handle_v2_get_quiz(ShareId, A);
+dispatch('GET', ["v2", "media", "shares", ShareId, "image"], _A) ->
+    handle_v2_get_share_image(ShareId);
+
 dispatch(_Method, _Segs, _A) ->
     json_error(404, <<"not_found">>, #{<<"path">> => <<"unknown">>}).
 
@@ -387,6 +421,491 @@ with_admin(A, Fun) ->
         {error, Resp} -> Resp
     end.
 
+%%====================================================================
+%% V2 auth (multi-admin) - cookie session
+%%====================================================================
+
+with_v2_admin(A, Fun) ->
+    case v2_current_admin(A) of
+        {ok, Admin} -> Fun(Admin);
+        _ -> v2_unauthorized()
+    end.
+
+v2_unauthorized() ->
+    [{status, 401},
+     {header, {"Content-Type", "application/json"}},
+     {content, "application/json", iolist_to_binary(json_encode(#{
+         <<"ok">> => false,
+         <<"error">> => <<"unauthorized">>,
+         <<"details">> => <<"Not logged in">>
+     }))}].
+
+handle_v2_me(A) ->
+    case v2_current_admin(A) of
+        {ok, Admin} ->
+            json_ok(200, #{<<"admin">> => v2_admin_public(Admin)});
+        _ ->
+            v2_unauthorized()
+    end.
+
+handle_v2_logout(A) ->
+    _ = v2_delete_session(A),
+    json_ok_headers(200, #{<<"loggedOut">> => true}, [v2_set_cookie_header_expire()]).
+
+handle_v2_register(A) ->
+    case read_json_body(A) of
+        {ok, Body} ->
+            Email0 = maps:get(<<"email">>, Body, undefined),
+            Pass0 = maps:get(<<"password">>, Body, undefined),
+            case {validate_email(Email0), validate_password(Pass0)} of
+                {{ok, Email}, {ok, Pass}} ->
+                    v2_with_lock(fun() ->
+                        case v2_lookup_admin_by_email(Email) of
+                            {ok, _ExistingId} ->
+                                json_error(409, <<"email_taken">>, #{});
+                            not_found ->
+                                AdminId = uuid_v4(),
+                                Salt = crypto:strong_rand_bytes(16),
+                                Hash = v2_password_hash(Pass, Salt),
+                                Admin = #{
+                                    <<"id">> => to_bin(AdminId),
+                                    <<"email">> => Email,
+                                    <<"pw">> => #{
+                                        <<"alg">> => <<"pbkdf2_sha256">>,
+                                        <<"iter">> => 100000,
+                                        <<"salt">> => base64:encode(Salt),
+                                        <<"hash">> => base64:encode(Hash)
+                                    },
+                                    <<"createdAt">> => now_rfc3339()
+                                },
+                                ok = v2_save_admin(AdminId, Admin),
+                                ok = v2_index_put_email(Email, AdminId),
+                                {SessTok, SessHdr} = v2_new_session(AdminId),
+                                json_ok_headers(201,
+                                    #{<<"admin">> => v2_admin_public(Admin), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
+                                    [SessHdr])
+                        end
+                    end);
+                {{error, Msg}, _} ->
+                    json_error(400, <<"invalid_email">>, #{<<"details">> => Msg});
+                {_, {error, Msg}} ->
+                    json_error(400, <<"invalid_password">>, #{<<"details">> => Msg})
+            end;
+        {error, Msg} ->
+            json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+    end.
+
+handle_v2_login(A) ->
+    case read_json_body(A) of
+        {ok, Body} ->
+            Email0 = maps:get(<<"email">>, Body, undefined),
+            Pass0 = maps:get(<<"password">>, Body, undefined),
+            case {validate_email(Email0), validate_password(Pass0)} of
+                {{ok, Email}, {ok, Pass}} ->
+                    v2_with_lock(fun() ->
+                        case v2_lookup_admin_by_email(Email) of
+                            {ok, AdminId} ->
+                                case v2_load_admin(AdminId) of
+                                    {ok, Admin} ->
+                                        case v2_password_verify(Pass, Admin) of
+                                            true ->
+                                                {SessTok, SessHdr} = v2_new_session(AdminId),
+                                                json_ok_headers(200,
+                                                    #{<<"admin">> => v2_admin_public(Admin), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
+                                                    [SessHdr]);
+                                            false ->
+                                                v2_unauthorized()
+                                        end;
+                                    _ ->
+                                        v2_unauthorized()
+                                end;
+                            not_found ->
+                                v2_unauthorized()
+                        end
+                    end);
+                _ ->
+                    v2_unauthorized()
+            end;
+        _ ->
+            v2_unauthorized()
+    end.
+
+%%====================================================================
+%% V2 handlers (multi-admin)
+%%====================================================================
+
+v2_admin_id(Admin) ->
+    binary_to_list(to_bin(maps:get(<<"id">>, Admin, <<"">>))).
+
+with_v2_set_lock(AdminId, SetId, Fun) ->
+    global:trans({jaktpass_v2_set, {AdminId, SetId}}, Fun, [node()], 30000).
+
+handle_v2_get_sets(Admin) ->
+    AdminId = v2_admin_id(Admin),
+    Root = v2_admin_sets_dir(AdminId),
+    ok = filelib:ensure_dir(filename:join([Root, "dummy"])),
+    case file:list_dir(Root) of
+        {ok, Entries} ->
+            Sets = lists:foldl(
+                     fun(SetId, Acc) ->
+                         case v2_load_set_meta(AdminId, SetId) of
+                             {ok, Meta} ->
+                                 Name = get_in(Meta, [<<"set">>, <<"name">>]),
+                                 HasImage =
+                                     case get_in(Meta, [<<"image">>, <<"filename">>]) of
+                                         undefined -> false;
+                                         null -> false;
+                                         <<>> -> false;
+                                         _ -> true
+                                     end,
+                                 ShareId = maps:get(<<"shareId">>, Meta, null),
+                                 [#{<<"id">> => to_bin(SetId), <<"name">> => Name, <<"hasImage">> => HasImage, <<"shareId">> => ShareId} | Acc];
+                             _ -> Acc
+                         end
+                     end, [], Entries),
+            json_ok(200, lists:reverse(Sets));
+        {error, enoent} ->
+            json_ok(200, []);
+        {error, Reason} ->
+            json_error(500, <<"failed_to_list_sets">>, #{<<"reason">> => to_bin(Reason)})
+    end.
+
+handle_v2_post_sets(Admin, A) ->
+    AdminId = v2_admin_id(Admin),
+    case read_json_body(A) of
+        {ok, Body} ->
+            Name0 = maps:get(<<"name">>, Body, undefined),
+            case validate_nonempty_string(Name0) of
+                {ok, Name} ->
+                    SetId = uuid_v4(),
+                    Now = now_rfc3339(),
+                    %% Skapa shareId direkt (en share per set)
+                    ShareId = v2_new_share(AdminId, SetId),
+                    Meta = #{
+                        <<"set">> => #{<<"id">> => to_bin(SetId), <<"name">> => Name, <<"createdAt">> => Now},
+                        <<"image">> => null,
+                        <<"stands">> => [],
+                        <<"shareId">> => to_bin(ShareId)
+                    },
+                    case v2_save_set_meta(AdminId, SetId, Meta) of
+                        ok ->
+                            Url = v2_share_url(ShareId),
+                            json_ok(201, #{<<"id">> => to_bin(SetId), <<"shareId">> => to_bin(ShareId), <<"shareUrl">> => Url});
+                        {error, Reason} ->
+                            json_error(500, <<"failed_to_create_set">>, #{<<"reason">> => to_bin(Reason)})
+                    end;
+                {error, Msg} ->
+                    json_error(400, <<"invalid_name">>, #{<<"details">> => Msg})
+            end;
+        {error, Msg} ->
+            json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+    end.
+
+handle_v2_get_set(Admin, SetId) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                ShareId = maps:get(<<"shareId">>, Meta0, null),
+                ImageUrl =
+                    case {ShareId, get_in(Meta0, [<<"image">>, <<"filename">>])} of
+                        {null, _} -> null;
+                        {_, undefined} -> null;
+                        {_, null} -> null;
+                        {_, <<>>} -> null;
+                        {SId, _} -> <<"/api/v2/media/shares/", (to_bin(SId))/binary, "/image">>
+                    end,
+                Meta = Meta0#{<<"imageUrl">> => ImageUrl},
+                json_ok(200, Meta);
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_post_set_image(Admin, SetId, A) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                case parse_multipart_file(A, "file") of
+                    {ok, #{filename := OrigName, data := Bin}} ->
+                        case image_ext(OrigName) of
+                            {ok, Ext} ->
+                                Filename = "image." ++ Ext,
+                                Path = filename:join([v2_set_dir(AdminId, SetId), Filename]),
+                                ok = filelib:ensure_dir(Path),
+                                ok = file:write_file(Path, Bin),
+                                {W, H} = image_dims(Ext, Bin),
+                                Now = now_rfc3339(),
+                                ImageMeta = #{
+                                    <<"filename">> => to_bin(Filename),
+                                    <<"width">> => (case W of undefined -> null; _ -> W end),
+                                    <<"height">> => (case H of undefined -> null; _ -> H end),
+                                    <<"uploadedAt">> => Now
+                                },
+                                Meta = Meta0#{<<"image">> => ImageMeta},
+                                case v2_save_set_meta(AdminId, SetId, Meta) of
+                                    ok -> json_ok(200, ImageMeta);
+                                    {error, Reason} -> json_error(500, <<"failed_to_update_meta">>, #{<<"reason">> => to_bin(Reason)})
+                                end;
+                            {error, invalid_ext} ->
+                                json_error(400, <<"invalid_image_extension">>, #{<<"allowed">> => [<<"png">>,<<"jpg">>,<<"jpeg">>,<<"webp">>]})
+                        end;
+                    {error, Msg} ->
+                        json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
+                end;
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_post_set_stands(Admin, SetId, A) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case {v2_load_set_meta(AdminId, SetId), read_json_body(A)} of
+            {{ok, Meta0}, {ok, Body}} ->
+                Name0 = maps:get(<<"name">>, Body, undefined),
+                X0 = maps:get(<<"x">>, Body, undefined),
+                Y0 = maps:get(<<"y">>, Body, undefined),
+                case {validate_nonempty_string(Name0), validate_norm_coord(X0), validate_norm_coord(Y0)} of
+                    {{ok, Name}, {ok, X}, {ok, Y}} ->
+                        Now = now_rfc3339(),
+                        Stand = #{
+                            <<"id">> => to_bin(uuid_v4()),
+                            <<"name">> => Name,
+                            <<"x">> => X,
+                            <<"y">> => Y,
+                            <<"createdAt">> => Now,
+                            <<"updatedAt">> => Now
+                        },
+                        Stands0 = maps:get(<<"stands">>, Meta0, []),
+                        Meta = Meta0#{<<"stands">> => [Stand | Stands0]},
+                        case v2_save_set_meta(AdminId, SetId, Meta) of
+                            ok -> json_ok(201, Stand);
+                            {error, Reason} -> json_error(500, <<"failed_to_update_meta">>, #{<<"reason">> => to_bin(Reason)})
+                        end;
+                    _ ->
+                        json_error(400, <<"invalid_stand">>, #{})
+                end;
+            {{error, enoent}, _} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {_, {error, Msg}} ->
+                json_error(400, <<"invalid_json">>, #{<<"details">> => Msg});
+            {_, {ok, _}} ->
+                json_error(500, <<"failed_to_load_set">>, #{})
+        end
+    end).
+
+handle_v2_patch_stand(Admin, SetId, StandId0, A) ->
+    AdminId = v2_admin_id(Admin),
+    StandId = to_bin(StandId0),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case {v2_load_set_meta(AdminId, SetId), read_json_body(A)} of
+            {{ok, Meta0}, {ok, Body}} ->
+                Stands0 = maps:get(<<"stands">>, Meta0, []),
+                case split_by_id(Stands0, StandId) of
+                    {ok, Stand0, Rest} ->
+                        Specs = [
+                            {<<"name">>, fun validate_nonempty_string/1},
+                            {<<"x">>, fun validate_norm_coord/1},
+                            {<<"y">>, fun validate_norm_coord/1}
+                        ],
+                        case maybe_updates(Specs, Body, Stand0) of
+                            {ok, Stand1} ->
+                                Stand2 = Stand1#{<<"updatedAt">> => now_rfc3339()},
+                                Meta = Meta0#{<<"stands">> => [Stand2 | Rest]},
+                                case v2_save_set_meta(AdminId, SetId, Meta) of
+                                    ok -> json_ok(200, Stand2);
+                                    {error, Reason} -> json_error(500, <<"failed_to_update_meta">>, #{<<"reason">> => to_bin(Reason)})
+                                end;
+                            {error, Msg} ->
+                                json_error(400, <<"invalid_patch">>, #{<<"details">> => Msg})
+                        end;
+                    not_found ->
+                        json_error(404, <<"stand_not_found">>, #{<<"standId">> => StandId})
+                end;
+            {{error, enoent}, _} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {_, {error, Msg}} ->
+                json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+        end
+    end).
+
+handle_v2_delete_stand(Admin, SetId, StandId0) ->
+    AdminId = v2_admin_id(Admin),
+    StandId = to_bin(StandId0),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                Stands0 = maps:get(<<"stands">>, Meta0, []),
+                case split_by_id(Stands0, StandId) of
+                    {ok, _Stand, Rest} ->
+                        Meta = Meta0#{<<"stands">> => Rest},
+                        case v2_save_set_meta(AdminId, SetId, Meta) of
+                            ok -> json_ok(200, #{<<"deleted">> => true, <<"standId">> => StandId});
+                            {error, Reason} -> json_error(500, <<"failed_to_update_meta">>, #{<<"reason">> => to_bin(Reason)})
+                        end;
+                    not_found ->
+                        json_error(404, <<"stand_not_found">>, #{<<"standId">> => StandId})
+                end;
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_post_share(Admin, SetId) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                case maps:get(<<"shareId">>, Meta0, undefined) of
+                    S when is_binary(S), byte_size(S) > 0 ->
+                        json_ok(200, #{<<"shareId">> => S, <<"shareUrl">> => v2_share_url(binary_to_list(S))});
+                    _ ->
+                        ShareId = v2_new_share(AdminId, SetId),
+                        Meta = Meta0#{<<"shareId">> => to_bin(ShareId)},
+                        _ = v2_save_set_meta(AdminId, SetId, Meta),
+                        json_ok(201, #{<<"shareId">> => to_bin(ShareId), <<"shareUrl">> => v2_share_url(ShareId)})
+                end;
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_get_quiz(ShareId0, A) ->
+    Q = query_map(A),
+    Mode0 = maps:get(<<"mode">>, Q, <<"rand10">>),
+    Mode = normalize_quiz_mode(Mode0),
+    case v2_load_share(ShareId0) of
+        {ok, #{<<"adminId">> := AdminIdB, <<"setId">> := SetIdB}} ->
+            AdminId = binary_to_list(to_bin(AdminIdB)),
+            SetId = binary_to_list(to_bin(SetIdB)),
+            case v2_load_set_meta(AdminId, SetId) of
+                {ok, Meta} ->
+                    Stands0 = maps:get(<<"stands">>, Meta, []),
+                    seed_rand(),
+                    N0 = length(Stands0),
+                    Count =
+                        case Mode of
+                            <<"all">> -> N0;
+                            <<"randHalf">> -> (N0 + 1) div 2;
+                            <<"rand10">> -> 10;
+                            _ -> 10
+                        end,
+                    Sample = take_n(shuffle(Stands0), Count),
+                    VisibleDots = [#{<<"id">> => maps:get(<<"id">>, S),
+                                     <<"x">> => maps:get(<<"x">>, S),
+                                     <<"y">> => maps:get(<<"y">>, S)} || S <- Sample],
+                    Questions = [#{<<"standId">> => maps:get(<<"id">>, S),
+                                   <<"name">> => maps:get(<<"name">>, S)} || S <- Sample],
+                    ImageUrl = <<"/api/v2/media/shares/", (to_bin(v2_norm_share_id(ShareId0)))/binary, "/image">>,
+                    SetName = get_in(Meta, [<<"set">>, <<"name">>]),
+                    json_ok(200, #{
+                        <<"mode">> => Mode,
+                        <<"set">> => #{<<"id">> => to_bin(SetId), <<"name">> => SetName},
+                        <<"imageUrl">> => ImageUrl,
+                        <<"visibleStands">> => VisibleDots,
+                        <<"questions">> => Questions
+                    });
+                _ ->
+                    json_error(404, <<"set_not_found">>, #{})
+            end;
+        _ ->
+            json_error(404, <<"share_not_found">>, #{})
+    end.
+
+handle_v2_get_share_image(ShareId0) ->
+    case v2_load_share(ShareId0) of
+        {ok, #{<<"adminId">> := AdminIdB, <<"setId">> := SetIdB}} ->
+            AdminId = binary_to_list(to_bin(AdminIdB)),
+            SetId = binary_to_list(to_bin(SetIdB)),
+            case v2_load_set_meta(AdminId, SetId) of
+                {ok, Meta} ->
+                    case get_in(Meta, [<<"image">>, <<"filename">>]) of
+                        undefined -> json_error(404, <<"image_not_found">>, #{});
+                        null -> json_error(404, <<"image_not_found">>, #{});
+                        <<>> -> json_error(404, <<"image_not_found">>, #{});
+                        FilenameBin ->
+                            Filename = binary_to_list(FilenameBin),
+                            Path = filename:join([v2_set_dir(AdminId, SetId), Filename]),
+                            case file:read_file(Path) of
+                                {ok, Bin} ->
+                                    CT = content_type_from_filename(Filename),
+                                    [{status, 200},
+                                     {header, {"Content-Type", CT}},
+                                     {content, CT, Bin}];
+                                {error, enoent} ->
+                                    json_error(404, <<"image_not_found">>, #{});
+                                {error, Reason} ->
+                                    json_error(500, <<"failed_to_read_image">>, #{<<"reason">> => to_bin(Reason)})
+                            end
+                    end;
+                _ ->
+                    json_error(404, <<"set_not_found">>, #{})
+            end;
+        _ ->
+            json_error(404, <<"share_not_found">>, #{})
+    end.
+
+v2_save_set_meta(AdminId, SetId, Meta) ->
+    Path = v2_set_meta_path(AdminId, SetId),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Meta).
+
+v2_load_set_meta(AdminId, SetId) ->
+    Path = v2_set_meta_path(AdminId, SetId),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try {ok, json_decode(Bin)} catch _:_ -> {error, invalid_json} end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_norm_share_id(ShareId0) ->
+    case ShareId0 of
+        B when is_binary(B) -> B;
+        L when is_list(L) -> list_to_binary(L);
+        _ -> <<>>
+    end.
+
+v2_share_url(ShareId) when is_list(ShareId) ->
+    %% Hash-routing så Yaws inte behöver special-casing
+    <<"/v2/#/quiz/", (to_bin(ShareId))/binary>>;
+v2_share_url(ShareId) when is_binary(ShareId) ->
+    v2_share_url(binary_to_list(ShareId)).
+
+v2_new_share(AdminId, SetId) ->
+    Tok = base64url_encode(crypto:strong_rand_bytes(18)),
+    Share = #{<<"adminId">> => to_bin(AdminId), <<"setId">> => to_bin(SetId), <<"createdAt">> => now_rfc3339()},
+    Path = v2_share_path(Tok),
+    ok = filelib:ensure_dir(Path),
+    ok = write_json_atomic(Path, Share),
+    Tok.
+
+v2_load_share(ShareId0) ->
+    ShareId = case ShareId0 of
+                  B when is_binary(B) -> binary_to_list(B);
+                  L when is_list(L) -> L;
+                  _ -> ""
+              end,
+    Path = v2_share_path(ShareId),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try {ok, json_decode(Bin)} catch _:_ -> {error, invalid_json} end;
+        {error, enoent} ->
+            {error, enoent};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
 check_admin_auth(A) ->
     AdminUser = getenv_default("JAKTPASS_ADMIN_USER", "admin"),
     AdminPass = getenv_default("JAKTPASS_ADMIN_PASS", "admin"),
@@ -482,6 +1001,43 @@ meta_path(SetId) ->
 
 leaderboard_path(SetId) ->
     filename:join([set_dir(SetId), "leaderboard.json"]).
+
+%% V2 paths (multi-admin, separat från v1)
+v2_dir() ->
+    filename:join([data_dir(), "v2"]).
+
+v2_admins_dir() ->
+    filename:join([v2_dir(), "admins"]).
+
+v2_admin_dir(AdminId) ->
+    filename:join([v2_admins_dir(), AdminId]).
+
+v2_admin_path(AdminId) ->
+    filename:join([v2_admin_dir(AdminId), "admin.json"]).
+
+v2_admin_sets_dir(AdminId) ->
+    filename:join([v2_admin_dir(AdminId), "sets"]).
+
+v2_set_dir(AdminId, SetId) ->
+    filename:join([v2_admin_sets_dir(AdminId), SetId]).
+
+v2_set_meta_path(AdminId, SetId) ->
+    filename:join([v2_set_dir(AdminId, SetId), "meta.json"]).
+
+v2_sessions_dir() ->
+    filename:join([v2_dir(), "sessions"]).
+
+v2_session_path(Token) ->
+    filename:join([v2_sessions_dir(), Token ++ ".json"]).
+
+v2_shares_dir() ->
+    filename:join([v2_dir(), "shares"]).
+
+v2_share_path(ShareId) ->
+    filename:join([v2_shares_dir(), ShareId ++ ".json"]).
+
+v2_index_path() ->
+    filename:join([v2_dir(), "admin_index.json"]).
 
 list_sets() ->
     Root = sets_dir(),
@@ -1046,6 +1602,203 @@ getenv_default(Key, Default) ->
         V -> V
     end.
 
+%%====================================================================
+%% V2 storage/auth helpers
+%%====================================================================
+
+v2_with_lock(Fun) ->
+    global:trans({jaktpass_v2, lock}, Fun, [node()], 30000).
+
+v2_index_load() ->
+    Path = v2_index_path(),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                V = json_decode(Bin),
+                case is_map(V) of true -> {ok, V}; false -> {ok, #{}} end
+            catch _:_ ->
+                {ok, #{}}
+            end;
+        {error, enoent} ->
+            {ok, #{}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_index_save(Map) ->
+    Path = v2_index_path(),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Map).
+
+v2_index_put_email(EmailBin, AdminId0) ->
+    AdminId = to_bin(AdminId0),
+    {ok, M0} = v2_index_load(),
+    M1 = M0#{EmailBin => AdminId},
+    v2_index_save(M1).
+
+v2_lookup_admin_by_email(EmailBin) ->
+    case v2_index_load() of
+        {ok, M} ->
+            case maps:get(EmailBin, M, undefined) of
+                undefined -> not_found;
+                V -> {ok, binary_to_list(to_bin(V))}
+            end;
+        _ ->
+            not_found
+    end.
+
+v2_save_admin(AdminId0, Admin) ->
+    AdminId = to_bin(AdminId0),
+    Path = v2_admin_path(binary_to_list(AdminId)),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Admin).
+
+v2_load_admin(AdminId0) ->
+    AdminId = to_bin(AdminId0),
+    Path = v2_admin_path(binary_to_list(AdminId)),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try {ok, json_decode(Bin)} catch _:_ -> {error, invalid_json} end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_admin_public(Admin) ->
+    #{<<"id">> => maps:get(<<"id">>, Admin, null),
+      <<"email">> => maps:get(<<"email">>, Admin, null),
+      <<"createdAt">> => maps:get(<<"createdAt">>, Admin, null)}.
+
+validate_email(undefined) -> {error, <<"missing">>};
+validate_email(null) -> {error, <<"missing">>};
+validate_email(B) when is_binary(B) ->
+    E = bin_trim(B),
+    case re:run(binary_to_list(E), "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", [{capture, none}]) of
+        match -> {ok, E};
+        nomatch -> {error, <<"invalid_format">>}
+    end;
+validate_email(L) when is_list(L) ->
+    validate_email(list_to_binary(L));
+validate_email(_) ->
+    {error, <<"invalid_type">>}.
+
+validate_password(undefined) -> {error, <<"missing">>};
+validate_password(null) -> {error, <<"missing">>};
+validate_password(B) when is_binary(B) ->
+    P = bin_trim(B),
+    case byte_size(P) >= 8 of
+        true -> {ok, P};
+        false -> {error, <<"too_short">>}
+    end;
+validate_password(L) when is_list(L) ->
+    validate_password(list_to_binary(L));
+validate_password(_) ->
+    {error, <<"invalid_type">>}.
+
+v2_password_hash(PassBin, SaltBin) ->
+    Iter = 100000,
+    case erlang:function_exported(crypto, pbkdf2_hmac, 5) of
+        true ->
+            crypto:pbkdf2_hmac(sha256, PassBin, SaltBin, Iter, 32);
+        false ->
+            crypto:hash(sha256, <<SaltBin/binary, PassBin/binary>>)
+    end.
+
+v2_password_verify(PassBin, Admin) ->
+    Pw = maps:get(<<"pw">>, Admin, #{}),
+    SaltB64 = maps:get(<<"salt">>, Pw, <<>>),
+    HashB64 = maps:get(<<"hash">>, Pw, <<>>),
+    Salt = try base64:decode(SaltB64) catch _:_ -> <<>> end,
+    Want = try base64:decode(HashB64) catch _:_ -> <<>> end,
+    Got = v2_password_hash(PassBin, Salt),
+    Got =:= Want.
+
+v2_cookie_name() -> "jaktpass_v2".
+
+v2_cookie_secure() ->
+    case string:lowercase(getenv_default("JAKTPASS_COOKIE_SECURE", "false")) of
+        "1" -> true;
+        "true" -> true;
+        "yes" -> true;
+        _ -> false
+    end.
+
+v2_set_cookie_header(Token) when is_list(Token) ->
+    Base = "jaktpass_v2=" ++ Token ++ "; Path=/; HttpOnly; SameSite=Lax",
+    Val = case v2_cookie_secure() of true -> Base ++ "; Secure"; false -> Base end,
+    {header, {"Set-Cookie", Val}}.
+
+v2_set_cookie_header_expire() ->
+    %% Expire cookie
+    {header, {"Set-Cookie", "jaktpass_v2=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"}}.
+
+v2_new_session(AdminId0) ->
+    AdminId = to_bin(AdminId0),
+    TokBin = crypto:strong_rand_bytes(24),
+    Tok = base64url_encode(TokBin),
+    Sess = #{<<"adminId">> => AdminId, <<"createdAt">> => now_rfc3339()},
+    Path = v2_session_path(Tok),
+    ok = filelib:ensure_dir(Path),
+    ok = write_json_atomic(Path, Sess),
+    {Tok, v2_set_cookie_header(Tok)}.
+
+v2_delete_session(A) ->
+    case v2_get_cookie(A#arg.headers, v2_cookie_name()) of
+        undefined -> ok;
+        Tok ->
+            Path = v2_session_path(Tok),
+            _ = file:delete(Path),
+            ok
+    end.
+
+v2_current_admin(A) ->
+    case v2_get_cookie(A#arg.headers, v2_cookie_name()) of
+        undefined -> error;
+        Tok ->
+            Path = v2_session_path(Tok),
+            case file:read_file(Path) of
+                {ok, Bin} ->
+                    try
+                        Sess = json_decode(Bin),
+                        AdminIdB = maps:get(<<"adminId">>, Sess, undefined),
+                        case AdminIdB of
+                            undefined -> error;
+                            _ ->
+                                case v2_load_admin(binary_to_list(to_bin(AdminIdB))) of
+                                    {ok, Admin} -> {ok, Admin};
+                                    _ -> error
+                                end
+                        end
+                    catch _:_ ->
+                        error
+                    end;
+                _ ->
+                    error
+            end
+    end.
+
+v2_get_cookie(H, Name) when is_record(H, headers) ->
+    %% cookie kan vara lista av #cookie{} eller {Key,Val}
+    Cookies = H#headers.cookie,
+    v2_get_cookie_loop(Cookies, Name);
+v2_get_cookie(_, _) ->
+    undefined.
+
+v2_get_cookie_loop([], _Name) -> undefined;
+v2_get_cookie_loop([C | Rest], Name) ->
+    case C of
+        #cookie{key = K, value = V} ->
+            case K =:= Name of true -> V; false -> v2_get_cookie_loop(Rest, Name) end;
+        {K, V} ->
+            case K =:= Name of true -> V; false -> v2_get_cookie_loop(Rest, Name) end;
+        _ ->
+            v2_get_cookie_loop(Rest, Name)
+    end.
+
+base64url_encode(Bin) ->
+    Enc0 = binary_to_list(base64:encode(Bin)),
+    Enc1 = [case C of $+ -> $-; $/ -> $_; $= -> $\s; _ -> C end || C <- Enc0],
+    lists:filter(fun(C) -> C =/= $\s end, Enc1).
+
 get_in(Map, [K | Rest]) when is_map(Map) ->
     case maps:get(K, Map, undefined) of
         undefined -> undefined;
@@ -1091,6 +1844,13 @@ json_ok(Code, Data) ->
     [{status, Code},
      {header, {"Content-Type", "application/json"}},
      {content, "application/json", Body}].
+
+json_ok_headers(Code, Data, ExtraHeaders) ->
+    Body = iolist_to_binary(json_encode(#{<<"ok">> => true, <<"data">> => Data})),
+    [{status, Code},
+     {header, {"Content-Type", "application/json"}}] ++
+    ExtraHeaders ++
+    [{content, "application/json", Body}].
 
 json_error(Code, Err, Details) ->
     Body = iolist_to_binary(json_encode(#{<<"ok">> => false, <<"error">> => Err, <<"details">> => Details})),

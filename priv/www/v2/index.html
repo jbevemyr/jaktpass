@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jaktpass v2</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .v2wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+      .v2top { display:flex; justify-content:space-between; align-items:center; gap: 12px; padding: 8px 0 12px; }
+      .v2brand { font-weight: 900; letter-spacing: 0.3px; }
+      .v2nav { display:flex; gap: 8px; flex-wrap: wrap; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .small { font-size: 12px; color: var(--muted); }
+      .copyrow { display:flex; gap: 8px; align-items:center; flex-wrap: wrap; }
+      .sharebox { width: 100%; max-width: 720px; }
+    </style>
+  </head>
+  <body>
+    <div class="v2wrap">
+      <div class="v2top">
+        <div class="v2brand">Jaktpass v2</div>
+        <div class="v2nav">
+          <button id="v2-nav-login" class="secondary">Logga in</button>
+          <button id="v2-nav-register" class="secondary">Registrera</button>
+          <button id="v2-nav-admin" class="secondary">Mina set</button>
+          <button id="v2-nav-logout" class="danger" style="display:none">Logga ut</button>
+        </div>
+      </div>
+
+      <div id="v2-view" class="card"></div>
+      <div id="v2-toast" class="toast" style="display:none"></div>
+    </div>
+
+    <script src="/v2/app.js"></script>
+  </body>
+</html>
+
+

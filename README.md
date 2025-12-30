@@ -12,6 +12,7 @@ En liten Seterra-liknande webapp för att träna på var jaktpass ligger på en 
 - **`JAKTPASS_DATA_DIR`**: datakatalog (default `./priv/data`)
 - **`JAKTPASS_ADMIN_USER`**: admin username (default `admin`)
 - **`JAKTPASS_ADMIN_PASS`**: admin password (default `admin`)
+- **`JAKTPASS_COOKIE_SECURE`**: sätt till `true` i production (HTTPS) för att lägga `Secure` på v2-cookie (default `false`)
 
 Exempel:
 
@@ -53,6 +54,41 @@ Lägg t.ex. detta i din `yaws.conf`:
 ```
 
 Se till att `jaktpass_appmod.beam` finns på Erlang code path när Yaws startar (t.ex. via `-pa` eller genom att lägga den i en katalog Yaws laddar).
+
+## V2 (multi-admin) – separat från v1
+
+V2 ligger parallellt med nuvarande Basic Auth-läge (v1). V1 fortsätter fungera som innan.
+
+- **V2 UI**: `"/v2/"` (hash-routing)
+  - Registrering: `"/v2/#/register"`
+  - Login: `"/v2/#/login"`
+  - Admin (mina set): `"/v2/#/admin"`
+  - Publikt quiz via share-länk: `"/v2/#/quiz/<shareId>"`
+
+### V2 API (session-cookie)
+- `POST /api/v2/register` `{email, password}` → skapar admin + sätter cookie
+- `POST /api/v2/login` `{email, password}` → sätter cookie
+- `POST /api/v2/logout` → rensar cookie
+- `GET /api/v2/me` → `{admin}`
+- `GET /api/v2/sets` (auth) → lista dina set
+- `POST /api/v2/sets` (auth) `{name}` → skapar set + shareId
+- `POST /api/v2/sets/:setId/share` (auth) → skapar/returnerar share-länk
+- `GET /api/v2/quiz/:shareId?mode=rand10|randHalf|all` (publikt) → quiz-pack
+- `GET /api/v2/media/shares/:shareId/image` (publikt) → bildfil
+
+### V2 data på disk
+Ligger under `JAKTPASS_DATA_DIR` (default `./priv/data`) i en separat underkatalog:
+
+```
+priv/data/
+  v2/
+    admin_index.json
+    admins/<adminId>/admin.json
+    admins/<adminId>/sets/<setId>/meta.json
+    admins/<adminId>/sets/<setId>/image.<ext>
+    sessions/<token>.json
+    shares/<shareId>.json
+```
 
 ## Python-server (för lokal test)
 
