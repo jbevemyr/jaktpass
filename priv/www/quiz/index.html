@@ -84,12 +84,12 @@
             <div class="row">
               <div class="pill">Quiz-typ:</div>
               <div class="segmented" role="group" aria-label="Quiz-typ">
-                <button id="mode-rand10" class="seg-btn">10</button>
-                <button id="mode-randHalf" class="seg-btn">1/2</button>
+                <button id="mode-rand10" class="seg-btn">10 pass</button>
+                <button id="mode-randHalf" class="seg-btn">Hälften</button>
                 <button id="mode-all" class="seg-btn">Alla</button>
               </div>
             </div>
-            <div class="hint">Välj set och tryck Start.</div>
+            <div class="hint">Välj hur många pass du vill köra, välj sedan ett set och tryck Start.</div>
             <div id="quiz-set-list" class="set-list"></div>
           </div>
 
@@ -143,6 +143,16 @@
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="finish-title">
         <h3 id="finish-title">Klart!</h3>
         <div class="hint">Din score: <b><span id="finish-score">0%</span></b></div>
+        <div class="card" style="margin-top:12px">
+          <div class="row">
+            <label>Namn
+              <input id="finish-name" type="text" placeholder="Ditt namn" />
+            </label>
+            <button id="finish-save">Spara till topplistan</button>
+          </div>
+          <div class="hint" style="margin-top:8px">Topplista (för detta set och vald quiz-typ):</div>
+          <ol id="finish-leaderboard" class="list"></ol>
+        </div>
         <div class="row" style="margin-top:10px">
           <button id="finish-restart">Starta om</button>
           <button id="finish-to-list" class="secondary">Avsluta</button>

@@ -56,6 +56,9 @@ def set_dir(set_id: str) -> Path:
 def meta_path(set_id: str) -> Path:
     return set_dir(set_id) / "meta.json"
 
+def leaderboard_path(set_id: str) -> Path:
+    return set_dir(set_id) / "leaderboard.json"
+
 
 def atomic_write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +284,62 @@ def save_set_meta(set_id: str, meta: Dict[str, Any]) -> None:
     atomic_write_json(meta_path(set_id), meta)
 
 
+def load_leaderboard(set_id: str) -> List[Dict[str, Any]]:
+    p = leaderboard_path(set_id)
+    try:
+        data = read_json(p)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def save_leaderboard(set_id: str, items: List[Dict[str, Any]]) -> None:
+    atomic_write_json(leaderboard_path(set_id), items)
+
+
+def normalize_mode(mode: str) -> str:
+    m = (mode or "").strip()
+    if m in ("rand10", "randHalf", "all"):
+        return m
+    if m == "half":
+        return "randHalf"
+    if m == "rand":
+        return "rand10"
+    return "all"
+
+
+def validate_player_name(name: Any) -> Optional[str]:
+    if name is None:
+        return None
+    s = str(name).strip()
+    if not s:
+        return None
+    if len(s.encode("utf-8")) > 64:
+        return None
+    return s
+
+
+def validate_score(score: Any) -> Optional[int]:
+    try:
+        v = int(score)
+    except Exception:
+        return None
+    if v < 0 or v > 100:
+        return None
+    return v
+
+
+def sort_leaderboard(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # score desc, createdAt desc
+    return sorted(
+        items,
+        key=lambda x: (int(x.get("score") or 0), str(x.get("createdAt") or "")),
+        reverse=True,
+    )
+
+
 def find_entity_set(list_key: str, entity_id: str) -> Optional[str]:
     for s in list_sets():
         sid = s["id"]
@@ -494,6 +553,43 @@ class Handler(BaseHTTPRequestHandler):
                 visible_dots = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y")} for s in sample]
                 questions = [{"standId": s.get("id"), "name": s.get("name")} for s in sample]
                 return self._ok({"visibleStands": visible_dots, "questions": questions})
+
+            if method == "GET" and len(segs) == 3 and segs[0] == "sets" and segs[2] == "leaderboard":
+                set_id = unquote(segs[1])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
+                qs = parse_qs(u.query or "")
+                mode = normalize_mode((qs.get("mode") or ["all"])[0])
+                with with_set_lock(set_id):
+                    items = load_leaderboard(set_id)
+                items = [i for i in items if (i.get("mode") or "all") == mode]
+                items = sort_leaderboard(items)[:20]
+                return self._ok({"mode": mode, "items": items})
+
+            if method == "POST" and len(segs) == 3 and segs[0] == "sets" and segs[2] == "leaderboard":
+                set_id = unquote(segs[1])
+                if not validate_set_id(set_id):
+                    return self._err(400, "invalid_set_id", {"setId": set_id})
+                body = self._read_json_body()
+                if body is None:
+                    return self._err(400, "invalid_json", {})
+                name = validate_player_name(body.get("name"))
+                score = validate_score(body.get("score"))
+                mode = normalize_mode(body.get("mode") or "all")
+                if not name:
+                    return self._err(400, "invalid_name", {"details": "missing/empty/too_long"})
+                if score is None:
+                    return self._err(400, "invalid_score", {"details": "0..100"})
+                item = {"name": name, "score": score, "mode": mode, "createdAt": now_rfc3339()}
+                with with_set_lock(set_id):
+                    items = load_leaderboard(set_id)
+                    items = sort_leaderboard([item] + (items or []))[:200]
+                    try:
+                        save_leaderboard(set_id, items)
+                    except Exception as e:
+                        return self._err(500, "failed_to_save_leaderboard", {"error": str(e)})
+                top = [i for i in items if (i.get("mode") or "all") == mode][:20]
+                return self._ok({"saved": True, "mode": mode, "items": top}, code=201)
 
             if method == "GET" and segs[:4] == ["media", "sets", segs[2] if len(segs) > 2 else "", "image"]:
                 if len(segs) != 4:

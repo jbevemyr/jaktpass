@@ -294,6 +294,37 @@ function setQuizMode(mode) {
   $("#mode-all")?.classList.toggle("active", mode === "all");
 }
 
+function modeLabel(mode) {
+  if (mode === "rand10") return "10 pass (slump)";
+  if (mode === "randHalf") return "Hälften (slump)";
+  return "Alla pass";
+}
+
+async function fetchLeaderboard(setId, mode) {
+  const qs = new URLSearchParams();
+  qs.set("mode", mode || "all");
+  const r = await api(`/api/sets/${encodeURIComponent(setId)}/leaderboard?${qs.toString()}`);
+  return r.data;
+}
+
+function renderLeaderboardList(items) {
+  const ol = $("#finish-leaderboard");
+  if (!ol) return;
+  ol.innerHTML = "";
+  if (!items || !items.length) {
+    ol.appendChild(el("li", { text: "Ingen topplista ännu." }));
+    return;
+  }
+  items.slice(0, 20).forEach((it) => {
+    const name = it.name || "";
+    const score = typeof it.score === "number" ? it.score : (parseInt(it.score, 10) || 0);
+    ol.appendChild(el("li", {}, [
+      el("span", { text: name }),
+      el("span", { class: "pill", text: `${score}%` }),
+    ]));
+  });
+}
+
 function showQuizHome() {
   $("#quiz-home") && ($("#quiz-home").style.display = "");
   $("#quiz-play") && ($("#quiz-play").style.display = "none");
@@ -324,10 +355,111 @@ function renderQuizHome() {
     btnMap.addEventListener("click", () => showMapPreview(s.id));
     const btnPdf = el("button", { class: "secondary play-btn", text: "PDF" });
     btnPdf.addEventListener("click", () => generatePdfForSet(s.id));
+    const btnTop = el("button", { class: "secondary play-btn", text: "Topplista" });
+    btnTop.addEventListener("click", () => showLeaderboardModal(s.id));
     const right = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnMap, btnStart]);
-    const right2 = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnPdf, btnMap, btnStart]);
+    const right2 = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnTop, btnPdf, btnMap, btnStart]);
     root.appendChild(el("div", { class: "set-row" }, [left, right2]));
   });
+}
+
+function getOrCreateLeaderboardModal() {
+  let m = document.querySelector("#leaderboard-modal");
+  if (m) return m;
+  m = document.createElement("div");
+  m.id = "leaderboard-modal";
+  m.className = "modal";
+  m.style.display = "none";
+  m.setAttribute("aria-hidden", "true");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.addEventListener("click", () => showLeaderboardModal(false));
+
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.id = "leaderboard-card";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.id = "leaderboard-title";
+  title.textContent = "Topplista";
+
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.id = "leaderboard-hint";
+
+  const list = document.createElement("ol");
+  list.id = "leaderboard-list";
+  list.className = "list";
+  list.style.marginTop = "10px";
+
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.marginTop = "10px";
+
+  const close = document.createElement("button");
+  close.className = "secondary";
+  close.textContent = "Stäng";
+  close.addEventListener("click", () => showLeaderboardModal(false));
+  row.appendChild(close);
+
+  card.appendChild(title);
+  card.appendChild(hint);
+  card.appendChild(list);
+  card.appendChild(row);
+  m.appendChild(backdrop);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  return m;
+}
+
+function showLeaderboardModal(showOrSetId) {
+  const m = getOrCreateLeaderboardModal();
+  if (showOrSetId === false) {
+    m.style.display = "none";
+    m.setAttribute("aria-hidden", "true");
+    return;
+  }
+  m.style.display = "";
+  m.setAttribute("aria-hidden", "false");
+  if (typeof showOrSetId === "string") loadLeaderboardIntoModal(showOrSetId);
+}
+
+async function loadLeaderboardIntoModal(setId) {
+  const title = document.querySelector("#leaderboard-title");
+  const hint = document.querySelector("#leaderboard-hint");
+  const list = document.querySelector("#leaderboard-list");
+  if (list) list.innerHTML = "";
+
+  const mode = state.quiz.mode || "all";
+  try {
+    const meta = await loadSetMeta(setId);
+    if (title) title.textContent = `${meta?.set?.name || "Topplista"} – ${modeLabel(mode)}`;
+  } catch {
+    if (title) title.textContent = `Topplista – ${modeLabel(mode)}`;
+  }
+  if (hint) hint.textContent = "Visar bästa resultat för vald quiz-typ.";
+  try {
+    const d = await fetchLeaderboard(setId, mode);
+    const items = d?.items || [];
+    if (!list) return;
+    if (!items.length) {
+      list.appendChild(el("li", { text: "Ingen topplista ännu." }));
+      return;
+    }
+    items.slice(0, 20).forEach((it) => {
+      const name = it.name || "";
+      const score = typeof it.score === "number" ? it.score : (parseInt(it.score, 10) || 0);
+      const li = document.createElement("li");
+      li.appendChild(el("span", { text: name }));
+      li.appendChild(el("span", { class: "pill", text: `${score}%` }));
+      list.appendChild(li);
+    });
+  } catch {
+    if (list) list.appendChild(el("li", { text: "Kunde inte läsa topplistan." }));
+  }
 }
 
 function getOrCreateMapPreviewModal() {
@@ -868,6 +1000,18 @@ function showFinishModal(show, pct) {
   m.setAttribute("aria-hidden", show ? "false" : "true");
   if (show) {
     $("#finish-score").textContent = `${pct}%`;
+    const inp = $("#finish-name");
+    if (inp) inp.value = "";
+    // Ladda topplista för set + vald quiz-typ
+    const sid = state.quiz.selectedSetId;
+    const mode = state.quiz.mode || "all";
+    if (sid) {
+      fetchLeaderboard(sid, mode)
+        .then((d) => renderLeaderboardList(d?.items || []))
+        .catch(() => renderLeaderboardList([]));
+    } else {
+      renderLeaderboardList([]);
+    }
   }
 }
 
@@ -1055,6 +1199,26 @@ $("#quiz-back")?.addEventListener("click", () => {
 $("#finish-to-list")?.addEventListener("click", () => {
   showFinishModal(false, 0);
   showQuizHome();
+});
+
+$("#finish-save")?.addEventListener("click", async () => {
+  const sid = state.quiz.selectedSetId;
+  if (!sid) return;
+  const name = ($("#finish-name")?.value || "").trim();
+  if (!name) return showToast("Ange namn.");
+  const scoreTxt = ($("#finish-score")?.textContent || "0").replace("%", "");
+  const score = Math.max(0, Math.min(100, parseInt(scoreTxt, 10) || 0));
+  const mode = state.quiz.mode || "all";
+  try {
+    const r = await api(`/api/sets/${encodeURIComponent(sid)}/leaderboard`, {
+      method: "POST",
+      jsonBody: { name, score, mode },
+    });
+    renderLeaderboardList(r?.data?.items || []);
+    showToast("Sparat!");
+  } catch {
+    showToast("Kunde inte spara.");
+  }
 });
 
 $("#finish-restart")?.addEventListener("click", () => {

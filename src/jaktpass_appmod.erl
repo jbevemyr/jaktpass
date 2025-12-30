@@ -47,6 +47,10 @@ dispatch('GET', ["sets", SetId], _A) ->
     with_valid_set_id(SetId, fun(SId) -> handle_get_set(SId) end);
 dispatch('GET', ["sets", SetId, "quiz"], A) ->
     with_valid_set_id(SetId, fun(SId) -> handle_get_quiz(SId, A) end);
+dispatch('GET', ["sets", SetId, "leaderboard"], A) ->
+    with_valid_set_id(SetId, fun(SId) -> handle_get_leaderboard(SId, A) end);
+dispatch('POST', ["sets", SetId, "leaderboard"], A) ->
+    with_valid_set_id(SetId, fun(SId) -> handle_post_leaderboard(SId, A) end);
 dispatch('GET', ["media", "sets", SetId, "image"], _A) ->
     with_valid_set_id(SetId, fun(SId) -> handle_get_image(SId) end);
 
@@ -129,6 +133,62 @@ handle_get_quiz(SetId, A) ->
         {error, Reason} ->
             json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
     end.
+
+handle_get_leaderboard(SetId, A) ->
+    Q = query_map(A),
+    Mode0 = maps:get(<<"mode">>, Q, <<"all">>),
+    Mode = normalize_quiz_mode(Mode0),
+    with_set_lock(SetId, fun() ->
+        case load_leaderboard(SetId) of
+            {ok, Items0} ->
+                Items1 = [I || I <- Items0, maps:get(<<"mode">>, I, <<"all">>) =:= Mode],
+                Items = take_n(sort_leaderboard(Items1), 20),
+                json_ok(200, #{<<"mode">> => Mode, <<"items">> => Items});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_leaderboard">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_post_leaderboard(SetId, A) ->
+    with_set_lock(SetId, fun() ->
+        case read_json_body(A) of
+            {ok, Body} ->
+                Name0 = maps:get(<<"name">>, Body, undefined),
+                Score0 = maps:get(<<"score">>, Body, undefined),
+                Mode0 = maps:get(<<"mode">>, Body, <<"all">>),
+                case {validate_player_name(Name0), validate_score(Score0)} of
+                    {{ok, Name}, {ok, Score}} ->
+                        Mode = normalize_quiz_mode(Mode0),
+                        Now = now_rfc3339(),
+                        Item = #{
+                            <<"name">> => Name,
+                            <<"score">> => Score,
+                            <<"mode">> => Mode,
+                            <<"createdAt">> => Now
+                        },
+                        Items0 =
+                            case load_leaderboard(SetId) of
+                                {ok, L} when is_list(L) -> L;
+                                _ -> []
+                            end,
+                        Items1 = [Item | Items0],
+                        Items2 = take_n(sort_leaderboard(Items1), 200),
+                        case save_leaderboard(SetId, Items2) of
+                            ok ->
+                                Top = take_n([I || I <- Items2, maps:get(<<"mode">>, I, <<"all">>) =:= Mode], 20),
+                                json_ok(201, #{<<"saved">> => true, <<"mode">> => Mode, <<"items">> => Top});
+                            {error, Reason} ->
+                                json_error(500, <<"failed_to_save_leaderboard">>, #{<<"reason">> => to_bin(Reason)})
+                        end;
+                    {{error, Msg}, _} ->
+                        json_error(400, <<"invalid_name">>, #{<<"details">> => Msg});
+                    {_, {error, Msg}} ->
+                        json_error(400, <<"invalid_score">>, #{<<"details">> => Msg})
+                end;
+            {error, Msg} ->
+                json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+        end
+    end).
 
 handle_get_image(SetId) ->
     case load_set_meta(SetId) of
@@ -420,6 +480,9 @@ set_dir(SetId) ->
 meta_path(SetId) ->
     filename:join([set_dir(SetId), "meta.json"]).
 
+leaderboard_path(SetId) ->
+    filename:join([set_dir(SetId), "leaderboard.json"]).
+
 list_sets() ->
     Root = sets_dir(),
     ok = filelib:ensure_dir(filename:join([Root, "dummy"])),
@@ -467,6 +530,26 @@ save_set_meta(SetId, Meta) ->
     Path = meta_path(SetId),
     ok = filelib:ensure_dir(Path),
     write_json_atomic(Path, Meta).
+
+load_leaderboard(SetId) ->
+    Path = leaderboard_path(SetId),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                {ok, json_decode(Bin)}
+            catch _:_ ->
+                {ok, []}
+            end;
+        {error, enoent} ->
+            {ok, []};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+save_leaderboard(SetId, Items) ->
+    Path = leaderboard_path(SetId),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Items).
 
 write_json_atomic(Path, Term) ->
     Tmp = Path ++ ".tmp",
@@ -803,6 +886,60 @@ validate_norm_coord(B) when is_binary(B) ->
 validate_norm_coord(L) when is_list(L) ->
     validate_norm_coord(list_to_binary(L));
 validate_norm_coord(_) -> {error, <<"invalid_type">>}.
+
+validate_player_name(undefined) -> {error, <<"missing">>};
+validate_player_name(null) -> {error, <<"missing">>};
+validate_player_name(B) when is_binary(B) ->
+    Name = bin_trim(B),
+    case Name of
+        <<>> -> {error, <<"empty">>};
+        _ ->
+            %% max 32 tecken
+            case byte_size(Name) =< 64 of
+                true -> {ok, Name};
+                false -> {error, <<"too_long">>}
+            end
+    end;
+validate_player_name(L) when is_list(L) ->
+    validate_player_name(list_to_binary(L));
+validate_player_name(_) ->
+    {error, <<"invalid_type">>}.
+
+validate_score(S) when is_integer(S) ->
+    if S >= 0, S =< 100 -> {ok, S}; true -> {error, <<"out_of_range">>} end;
+validate_score(B) when is_binary(B) ->
+    case catch binary_to_integer(B) of
+        I when is_integer(I) -> validate_score(I);
+        _ -> {error, <<"invalid_number">>}
+    end;
+validate_score(L) when is_list(L) ->
+    validate_score(list_to_binary(L));
+validate_score(_) ->
+    {error, <<"invalid_type">>}.
+
+normalize_quiz_mode(<<"rand10">>) -> <<"rand10">>;
+normalize_quiz_mode(<<"randHalf">>) -> <<"randHalf">>;
+normalize_quiz_mode(<<"all">>) -> <<"all">>;
+normalize_quiz_mode(<<"half">>) -> <<"randHalf">>;
+normalize_quiz_mode(<<"rand">>) -> <<"rand10">>;
+normalize_quiz_mode(B) when is_binary(B) -> normalize_quiz_mode(bin_trim(B));
+normalize_quiz_mode(L) when is_list(L) -> normalize_quiz_mode(list_to_binary(L));
+normalize_quiz_mode(_) -> <<"all">>.
+
+sort_leaderboard(Items) ->
+    %% Högre score först, sedan nyast först.
+    lists:sort(
+      fun(A, B) ->
+          SA = maps:get(<<"score">>, A, 0),
+          SB = maps:get(<<"score">>, B, 0),
+          case SA =:= SB of
+              true ->
+                  maps:get(<<"createdAt">>, A, <<>>) >= maps:get(<<"createdAt">>, B, <<>>);
+              false ->
+                  SA > SB
+          end
+      end,
+      Items).
 
 %% NOTE: validate_polygon/is_valid_point borttaget (områden stöds ej längre).
 
