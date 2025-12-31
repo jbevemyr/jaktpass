@@ -274,19 +274,9 @@ function getOrCreateStandCreateModal() {
   name.id = "v2-stand-create-name";
   name.placeholder = "Passnamn";
 
-  const sym = document.createElement("select");
-  sym.id = "v2-stand-create-symbol";
-  [
-    ["dot", "Cirkel"],
-    ["square", "Fyrkant"],
-    ["triangle", "Triangel"],
-    ["cross", "Kryss"],
-  ].forEach(([v, t]) => {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = t;
-    sym.appendChild(o);
-  });
+  const symWrap = document.createElement("div");
+  symWrap.id = "v2-stand-create-symbol";
+  symWrap.className = "sym-choice";
 
   const btnOk = document.createElement("button");
   btnOk.id = "v2-stand-create-ok";
@@ -300,7 +290,10 @@ function getOrCreateStandCreateModal() {
   r1.className = "row";
   r1.style.gap = "8px";
   r1.appendChild(label("Namn", name));
-  r1.appendChild(label("Symbol", sym));
+
+  const rSym = document.createElement("div");
+  rSym.appendChild(Object.assign(document.createElement("div"), { className: "small", textContent: "Symbol" }));
+  rSym.appendChild(symWrap);
 
   const r2 = document.createElement("div");
   r2.className = "row";
@@ -311,6 +304,7 @@ function getOrCreateStandCreateModal() {
 
   card.appendChild(title);
   card.appendChild(r1);
+  card.appendChild(rSym);
   card.appendChild(r2);
 
   m.appendChild(backdrop);
@@ -322,13 +316,43 @@ function getOrCreateStandCreateModal() {
 function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) {
   const m = getOrCreateStandCreateModal();
   const name = document.querySelector("#v2-stand-create-name");
-  const sym = document.querySelector("#v2-stand-create-symbol");
+  const symWrap = document.querySelector("#v2-stand-create-symbol");
   const btnOk = document.querySelector("#v2-stand-create-ok");
   const btnCancel = document.querySelector("#v2-stand-create-cancel");
   const backdrop = m.querySelector(".modal-backdrop");
 
   name.value = defaultName || "";
-  sym.value = defaultSymbol || "dot";
+  let selected = defaultSymbol || "dot";
+
+  // render symbol buttons
+  symWrap.innerHTML = "";
+  const symbols = [
+    ["dot", "Cirkel"],
+    ["square", "Fyrkant"],
+    ["triangle", "Triangel"],
+    ["star", "Stjärna"],
+  ];
+  const btns = [];
+  symbols.forEach(([v, labelTxt]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = v === selected ? "active" : "";
+    const preview = document.createElement("div");
+    preview.className = `dot sym-${v}`;
+    // färga preview som admin (gult) så den syns tydligt
+    preview.classList.add("admin");
+    const txt = document.createElement("span");
+    txt.textContent = labelTxt;
+    b.appendChild(preview);
+    b.appendChild(txt);
+    b.addEventListener("click", () => {
+      selected = v;
+      btns.forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+    });
+    btns.push(b);
+    symWrap.appendChild(b);
+  });
 
   m.style.display = "";
   m.setAttribute("aria-hidden", "false");
@@ -348,8 +372,7 @@ function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) 
     btnOk.onclick = () => {
       const nm = (name.value || "").trim();
       if (!nm) return toast("Ange namn.");
-      const s = (sym.value || "dot").trim();
-      close({ name: nm, symbol: s });
+      close({ name: nm, symbol: selected });
     };
   });
 }

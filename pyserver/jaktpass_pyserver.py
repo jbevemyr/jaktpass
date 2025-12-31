@@ -236,7 +236,7 @@ def validate_symbol(sym: Any) -> str:
     s = str(sym or "").strip().lower()
     if not s or s == "dot" or s == "circle":
         return "dot"
-    if s in ("square", "triangle", "cross"):
+    if s in ("square", "triangle", "cross", "star"):
         return s
     return "dot"
 

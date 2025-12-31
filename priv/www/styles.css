@@ -159,12 +159,12 @@ button.danger { background: var(--danger); color: #0b0d10; }
   width: 0;
   height: 0;
   background: transparent;
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-bottom: 14px solid #ffffff;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 18px solid #ffffff;
   border-top: 0;
   border-radius: 0;
-  transform: translate(-50%, -60%);
+  transform: translate(-50%, -65%);
 }
 .dot.sym-triangle.admin { border-bottom-color: #ffcf5c; border-left-color: transparent; border-right-color: transparent; }
 .dot.sym-triangle.quiz.correct1 { border-bottom-color: #43e6a8; }
@@ -174,7 +174,8 @@ button.danger { background: var(--danger); color: #0b0d10; }
 
 /* Kryss: ritas med pseudo-element */
 .dot.sym-cross {
-  border-radius: 3px;
+  border: none;
+  border-radius: 0;
   background: transparent;
 }
 .dot.sym-cross::before,
@@ -201,6 +202,59 @@ button.danger { background: var(--danger); color: #0b0d10; }
 .dot.sym-cross.quiz.correct3::after { background:#ff9b3d; }
 .dot.sym-cross.quiz.reveal::before,
 .dot.sym-cross.quiz.reveal::after   { background:#ff4d4d; }
+
+/* Stjärna: rita som "asterisk" med 3 linjer (via gradients) */
+.dot.sym-star {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  width: 14px;
+  height: 14px;
+  --sym-color: #ffffff;
+  background:
+    linear-gradient(0deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(60deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(120deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%);
+  transform: translate(-50%, -50%);
+}
+.dot.sym-star.admin { --sym-color: #ffcf5c; }
+.dot.sym-star.quiz.correct1 { --sym-color: #43e6a8; }
+.dot.sym-star.quiz.correct2 { --sym-color: #ffd24d; }
+.dot.sym-star.quiz.correct3 { --sym-color: #ff9b3d; }
+.dot.sym-star.quiz.reveal   { --sym-color: #ff4d4d; }
+
+/* Symbol-väljare (modal): låt .dot användas som preview utan absolute-position */
+.sym-choice .dot {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+}
+.sym-choice .dot.sym-triangle {
+  transform: none;
+  margin-top: 2px;
+}
+.sym-choice {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sym-choice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 700;
+}
+.sym-choice button.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(120,160,255,0.15) inset;
+}
 
 /* Mobil/padda: större träffyta utan att pricken blir visuellt större */
 @media (pointer: coarse) {

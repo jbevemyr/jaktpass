@@ -2128,6 +2128,7 @@ validate_symbol(Bin0, _Orig) ->
         <<"square">> -> {ok, <<"square">>};
         <<"triangle">> -> {ok, <<"triangle">>};
         <<"cross">> -> {ok, <<"cross">>};
+        <<"star">> -> {ok, <<"star">>};
         _ -> {error, <<"invalid_symbol">>}
     end.
 
