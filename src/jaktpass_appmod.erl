@@ -2357,9 +2357,10 @@ v2_password_verify(PassBin, Admin) ->
     Pw = maps:get(<<"pw">>, Admin, #{}),
     SaltB64 = maps:get(<<"salt">>, Pw, <<>>),
     HashB64 = maps:get(<<"hash">>, Pw, <<>>),
-    Salt = try base64:decode(SaltB64) catch _:_ -> <<>> end,
-    Want = try base64:decode(HashB64) catch _:_ -> <<>> end,
-    Got = v2_password_hash(PassBin, Salt),
+    %% OTP22 + vår JSON-decoder kan ge listor för strängar → säkerställ binary före base64-decode.
+    Salt = try base64:decode(to_bin(SaltB64)) catch _:_ -> <<>> end,
+    Want = try base64:decode(to_bin(HashB64)) catch _:_ -> <<>> end,
+    Got = v2_password_hash(to_bin(PassBin), Salt),
     Got =:= Want.
 
 v2_cookie_name() -> "jaktpass_v2".
