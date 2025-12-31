@@ -33,6 +33,7 @@ out(A) ->
         dispatch(Method, Segs, A)
     catch
         Class:Reason:Stack ->
+            io:format("~p:~p~n~p~n", [Class,Reason, Stack]),
             json_error(500, <<"internal_error">>, #{
                 <<"class">> => to_bin(Class),
                 <<"reason">> => to_bin(io_lib:format("~p", [Reason])),
