@@ -573,7 +573,14 @@ async function renderRegister() {
 
 function setRow(setObj) {
   const d = document.createElement("div");
-  d.className = "set-row";
+  d.className = `set-row ${v2state.selectedSetId === setObj.id ? "selected" : ""}`.trim();
+
+  // Klick på raden väljer set för "Bild & pass"
+  d.addEventListener("click", async () => {
+    v2state.selectedSetId = setObj.id;
+    v2state.moveStandId = null;
+    await renderAdmin();
+  });
 
   const left = document.createElement("div");
   left.appendChild(Object.assign(document.createElement("div"), { className: "title", textContent: setObj.name }));
@@ -583,7 +590,9 @@ function setRow(setObj) {
   const btnShare = document.createElement("button");
   btnShare.className = "secondary play-btn";
   btnShare.textContent = "Hämta länk";
-  btnShare.addEventListener("click", async () => {
+  btnShare.addEventListener("click", async (e) => {
+    // klick på knappar ska inte byta vald rad
+    e.stopPropagation();
     try {
       const r = await api(`/api/v2/sets/${encodeURIComponent(setObj.id)}/share`, { method: "POST" });
       const url0 = r?.data?.shareUrl || "";
@@ -599,7 +608,8 @@ function setRow(setObj) {
   const btnQuiz = document.createElement("button");
   btnQuiz.className = "secondary play-btn";
   btnQuiz.textContent = "Öppna quiz";
-  btnQuiz.addEventListener("click", () => {
+  btnQuiz.addEventListener("click", (e) => {
+    e.stopPropagation();
     if (!setObj.shareId) return toast("Skapa länk först.");
     navTo(`#/quiz/${setObj.shareId}`);
   });
@@ -631,9 +641,11 @@ async function renderAdmin() {
   btnCreate.addEventListener("click", async () => {
     if (!name.value.trim()) return toast("Ange namn.");
     try {
-      await api("/api/v2/sets", { method: "POST", jsonBody: { name: name.value } });
+      const r = await api("/api/v2/sets", { method: "POST", jsonBody: { name: name.value } });
+      const newId = r?.data?.id;
       name.value = "";
       toast("Skapat.");
+      if (newId) v2state.selectedSetId = newId;
       // Vi är redan på #/admin och hashchange triggar inte alltid vid samma hash → re-render direkt.
       await renderAdmin();
     } catch {
