@@ -695,6 +695,7 @@ handle_v2_post_set_image(Admin, SetId, A) ->
 handle_v2_post_set_stands(Admin, SetId, A) ->
     AdminId = v2_admin_id(Admin),
     with_v2_set_lock(AdminId, SetId, fun() ->
+        v2_auth_dbg("v2 stands clidata=~p cont=~p", [type_tag(A#arg.clidata), A#arg.cont]),
         case {v2_load_set_meta(AdminId, SetId), read_json_body(A)} of
             {{ok, Meta0}, {ok, Body}} ->
                 Name0 = maps:get(<<"name">>, Body, undefined),
@@ -1970,7 +1971,11 @@ read_json_body(A) ->
     case recv_body_bin(A) of
         {ok, Bin} ->
             try
-                {ok, json_decode(Bin)}
+                V = json_decode(Bin),
+                case is_map(V) of
+                    true -> {ok, V};
+                    false -> {error, <<"expected_json_object">>}
+                end
             catch _:_ ->
                 {error, <<"could_not_decode_json">>}
             end;
