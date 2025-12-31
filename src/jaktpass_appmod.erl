@@ -2629,6 +2629,14 @@ json_error(Code, Err, Details) ->
 json_encode(Term) ->
     encode_value(Term).
 
+safe_encode_value(V) ->
+    try
+        encode_value(V)
+    catch _:_ ->
+        %% Sista utväg: serialisera som sträng så vi aldrig kraschar vid persistens.
+        encode_string(to_bin(V))
+    end.
+
 encode_value(null) -> <<"null">>;
 encode_value(true) -> <<"true">>;
 encode_value(false) -> <<"false">>;
@@ -2637,9 +2645,12 @@ encode_value(F) when is_float(F) -> float_to_binary(F, [compact]);
 encode_value(B) when is_binary(B) -> encode_string(B);
 encode_value(L) when is_list(L) ->
     %% Heuristic: treat as string if it's a flat (byte) list, else array
-    case is_flat_string_list(L) of
+    try is_flat_string_list(L) of
         true -> encode_string(iolist_to_binary(L));
         false -> encode_array(L)
+    catch _:_ ->
+        %% Om listan innehåller oväntade element, behandla den som JSON-array.
+        encode_array(L)
     end;
 encode_value(M) when is_map(M) -> encode_object(M);
 encode_value(Other) ->
@@ -2651,7 +2662,7 @@ is_flat_string_list(L) ->
     lists:all(fun(C) -> is_integer(C) andalso C >= 0 andalso C =< 255 end, L).
 
 encode_array(List) ->
-    Inner = join_iolist([encode_value(V) || V <- List], <<",">>),
+    Inner = join_iolist([safe_encode_value(V) || V <- List], <<",">>),
     [<<"[">>, Inner, <<"]">>].
 
 encode_object(Map) ->
@@ -2662,7 +2673,7 @@ encode_object(Map) ->
     [<<"{">>, Inner, <<"}">>].
 
 encode_kv(K, V) ->
-    [encode_string(to_bin(K)), <<":">>, encode_value(V)].
+    [encode_string(to_bin(K)), <<":">>, safe_encode_value(V)].
 
 encode_string(Bin) ->
     Esc = escape_json_string(binary_to_list(Bin), []),
