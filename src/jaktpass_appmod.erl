@@ -2564,11 +2564,18 @@ get_in(V, []) -> V;
 get_in(_, _Ks) -> undefined.
 
 to_bin(B) when is_binary(B) -> B;
-to_bin(L) when is_list(L) -> iolist_to_binary(L);
+to_bin(L) when is_list(L) ->
+    %% Listor är ofta strängar/iolists, men kan ibland råka innehålla "termer"
+    %% (t.ex. map) pga buggar/korrupt data. Då skulle iolist_to_binary/1 krascha.
+    try
+        iolist_to_binary(L)
+    catch _:_ ->
+        iolist_to_binary(io_lib:format("~tp", [L]))
+    end;
 to_bin(A) when is_atom(A) -> atom_to_binary(A, utf8);
 to_bin(I) when is_integer(I) -> integer_to_binary(I);
 to_bin(F) when is_float(F) -> float_to_binary(F, [compact]);
-to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+to_bin(T) -> iolist_to_binary(io_lib:format("~tp", [T])).
 
 %%====================================================================
 %% Security: validate setId to avoid path traversal (OTP22-safe)
