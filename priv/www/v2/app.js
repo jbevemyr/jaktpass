@@ -398,9 +398,19 @@ function normClick(img, evt) {
   return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
 }
 
+function asArray(v) {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object") return Object.values(v);
+  return [];
+}
+
 async function fetchSet(setId) {
   const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
-  return r?.data || null;
+  const data = r?.data || null;
+  if (data && typeof data === "object") {
+    data.stands = asArray(data.stands);
+  }
+  return data;
 }
 
 function standRow(setId, stand) {
@@ -486,7 +496,7 @@ function renderMapEditor(meta, setId) {
 
   function renderDots() {
     [...map.querySelectorAll(".dot")].forEach((n) => n.remove());
-    (meta.stands || []).forEach((s) => {
+    asArray(meta.stands).forEach((s) => {
       const dot = document.createElement("div");
       dot.className = `dot admin sym-${s.symbol || "dot"}`;
       dot.style.left = `${(s.x || 0) * 100}%`;
@@ -522,7 +532,7 @@ function renderMapEditor(meta, setId) {
       toast("Skapat.");
       await renderAdmin();
     } catch {
-      toast("Kunde inte skapa pass.");
+      toast("Kunde inte skapa punkt.");
     }
   });
 
@@ -775,7 +785,7 @@ async function renderAdmin() {
     if (meta) {
       sec.appendChild(renderMapEditor(meta, v2state.selectedSetId));
 
-      const stands = meta.stands || [];
+      const stands = asArray(meta.stands);
       sec.appendChild(h2(`Punkter (${stands.length})`));
       if (!stands.length) sec.appendChild(pSmall("Inga punkter ännu. Klicka på kartan för att skapa."));
       else stands.forEach((s) => sec.appendChild(standRow(v2state.selectedSetId, s)));

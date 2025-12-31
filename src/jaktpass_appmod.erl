@@ -37,9 +37,9 @@ out(A) ->
             json_error(500, <<"internal_error">>, #{
                 <<"class">> => to_bin(Class),
                 <<"reason">> => to_bin(io_lib:format("~p", [Reason])),
-                <<"stack">> => to_bin(io_lib:format("~p", [Stack]))
+                  <<"stack">> => to_bin(io_lib:format("~p", [Stack]))
             })
-    end.
+     end.
 
 %%====================================================================
 %% Routing
@@ -642,7 +642,10 @@ handle_v2_get_set(Admin, SetId) ->
                         {_, <<>>} -> null;
                         {SId, _} -> <<"/api/v2/media/shares/", (to_bin(SId))/binary, "/image">>
                     end,
-                Meta = Meta0#{<<"imageUrl">> => ImageUrl},
+                %% Säkerställ att stands alltid är en proper lista i svaren (UI förväntar sig array).
+                Stands = meta_get_stands(Meta0),
+                Meta1 = Meta0#{<<"stands">> => Stands},
+                Meta = Meta1#{<<"imageUrl">> => ImageUrl},
                 json_ok(200, Meta);
             {error, enoent} ->
                 json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
@@ -715,7 +718,7 @@ handle_v2_post_set_stands(Admin, SetId, A) ->
                             <<"createdAt">> => Now,
                             <<"updatedAt">> => Now
                         },
-                        Stands0 = maps:get(<<"stands">>, Meta0, []),
+                        Stands0 = meta_get_stands(Meta0),
                         Meta = Meta0#{<<"stands">> => [Stand | Stands0]},
                         case v2_save_set_meta(AdminId, SetId, Meta) of
                             ok -> json_ok(201, Stand);
@@ -739,7 +742,7 @@ handle_v2_patch_stand(Admin, SetId, StandId0, A) ->
     with_v2_set_lock(AdminId, SetId, fun() ->
         case {v2_load_set_meta(AdminId, SetId), read_json_body(A)} of
             {{ok, Meta0}, {ok, Body}} ->
-                Stands0 = maps:get(<<"stands">>, Meta0, []),
+                Stands0 = meta_get_stands(Meta0),
                 case split_by_id(Stands0, StandId) of
                     {ok, Stand0, Rest} ->
                         Specs = [
@@ -775,7 +778,7 @@ handle_v2_delete_stand(Admin, SetId, StandId0) ->
     with_v2_set_lock(AdminId, SetId, fun() ->
         case v2_load_set_meta(AdminId, SetId) of
             {ok, Meta0} ->
-                Stands0 = maps:get(<<"stands">>, Meta0, []),
+                Stands0 = meta_get_stands(Meta0),
                 case split_by_id(Stands0, StandId) of
                     {ok, _Stand, Rest} ->
                         Meta = Meta0#{<<"stands">> => Rest},
@@ -2576,6 +2579,25 @@ to_bin(A) when is_atom(A) -> atom_to_binary(A, utf8);
 to_bin(I) when is_integer(I) -> integer_to_binary(I);
 to_bin(F) when is_float(F) -> float_to_binary(F, [compact]);
 to_bin(T) -> iolist_to_binary(io_lib:format("~tp", [T])).
+
+%%====================================================================
+%% Helpers: normalize "stands" (OTP22-safe, repair corrupt/improper values)
+%%====================================================================
+
+normalize_stands_val(undefined) -> [];
+normalize_stands_val(null) -> [];
+normalize_stands_val(L) when is_list(L) -> proper_list(L);
+normalize_stands_val(M) when is_map(M) -> maps:values(M);
+normalize_stands_val(_) -> [].
+
+proper_list([]) -> [];
+proper_list([H|T]) when is_list(T) -> [H|proper_list(T)];
+proper_list([H|_BadTail]) -> [H].
+
+meta_get_stands(Meta) when is_map(Meta) ->
+    normalize_stands_val(maps:get(<<"stands">>, Meta, []));
+meta_get_stands(_Meta) ->
+    [].
 
 %%====================================================================
 %% Security: validate setId to avoid path traversal (OTP22-safe)
