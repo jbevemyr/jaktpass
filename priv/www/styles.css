@@ -151,6 +151,57 @@ button.danger { background: var(--danger); color: #0b0d10; }
   touch-action: manipulation;
 }
 
+/* Stand-symboler (v2): default dot = cirkel (samma som .dot) */
+.dot.sym-square { border-radius: 3px; }
+
+/* Triangel: renderas via border-trick, så width/height/bakgrund skiljer sig */
+.dot.sym-triangle {
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-bottom: 14px solid #ffffff;
+  border-top: 0;
+  border-radius: 0;
+  transform: translate(-50%, -60%);
+}
+.dot.sym-triangle.admin { border-bottom-color: #ffcf5c; border-left-color: transparent; border-right-color: transparent; }
+.dot.sym-triangle.quiz.correct1 { border-bottom-color: #43e6a8; }
+.dot.sym-triangle.quiz.correct2 { border-bottom-color: #ffd24d; }
+.dot.sym-triangle.quiz.correct3 { border-bottom-color: #ff9b3d; }
+.dot.sym-triangle.quiz.reveal   { border-bottom-color: #ff4d4d; }
+
+/* Kryss: ritas med pseudo-element */
+.dot.sym-cross {
+  border-radius: 3px;
+  background: transparent;
+}
+.dot.sym-cross::before,
+.dot.sym-cross::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 2px;
+  transform-origin: center;
+}
+.dot.sym-cross::before { transform: translate(-50%, -50%) rotate(45deg); }
+.dot.sym-cross::after  { transform: translate(-50%, -50%) rotate(-45deg); }
+.dot.sym-cross.admin::before,
+.dot.sym-cross.admin::after { background:#ffcf5c; }
+.dot.sym-cross.quiz.correct1::before,
+.dot.sym-cross.quiz.correct1::after { background:#43e6a8; }
+.dot.sym-cross.quiz.correct2::before,
+.dot.sym-cross.quiz.correct2::after { background:#ffd24d; }
+.dot.sym-cross.quiz.correct3::before,
+.dot.sym-cross.quiz.correct3::after { background:#ff9b3d; }
+.dot.sym-cross.quiz.reveal::before,
+.dot.sym-cross.quiz.reveal::after   { background:#ff4d4d; }
+
 /* Mobil/padda: större träffyta utan att pricken blir visuellt större */
 @media (pointer: coarse) {
   .dot::before {

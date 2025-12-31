@@ -164,7 +164,8 @@ handle_get_quiz(SetId, A) ->
             Sample = take_n(shuffle(Stands0), Count),
             VisibleDots = [#{<<"id">> => maps:get(<<"id">>, S),
                              <<"x">> => maps:get(<<"x">>, S),
-                             <<"y">> => maps:get(<<"y">>, S)} || S <- Sample],
+                             <<"y">> => maps:get(<<"y">>, S),
+                             <<"symbol">> => maps:get(<<"symbol">>, S, <<"dot">>)} || S <- Sample],
             Questions = [#{<<"standId">> => maps:get(<<"id">>, S),
                            <<"name">> => maps:get(<<"name">>, S)} || S <- Sample],
             json_ok(200, #{<<"visibleStands">> => VisibleDots,
@@ -353,16 +354,19 @@ handle_post_admin_set_stands(SetId, A) ->
                 X0 = maps:get(<<"x">>, Body, undefined),
                 Y0 = maps:get(<<"y">>, Body, undefined),
                 Note0 = maps:get(<<"note">>, Body, undefined),
+                Sym0 = maps:get(<<"symbol">>, Body, undefined),
                 case {validate_nonempty_string(Name0),
                       validate_norm_coord(X0),
-                      validate_norm_coord(Y0)} of
-                    {{ok, Name}, {ok, X}, {ok, Y}} ->
+                      validate_norm_coord(Y0),
+                      validate_symbol(Sym0)} of
+                    {{ok, Name}, {ok, X}, {ok, Y}, {ok, Sym}} ->
                         Now = now_rfc3339(),
                         Stand = #{
                             <<"id">> => to_bin(uuid_v4()),
                             <<"name">> => Name,
                             <<"x">> => X,
                             <<"y">> => Y,
+                            <<"symbol">> => Sym,
                             <<"createdAt">> => Now,
                             <<"updatedAt">> => Now
                         },
@@ -378,7 +382,7 @@ handle_post_admin_set_stands(SetId, A) ->
                             {error, Reason} -> json_error(500, <<"failed_to_save_meta">>, #{<<"reason">> => to_bin(Reason)})
                         end;
                     _ ->
-                        json_error(400, <<"invalid_payload">>, #{<<"expected">> => <<"name + x + y (0..1)">>})
+                        json_error(400, <<"invalid_payload">>, #{<<"expected">> => <<"name + x + y (0..1) + symbol?">>})
                 end;
             {{error, enoent}, _} ->
                 json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
@@ -397,7 +401,8 @@ handle_patch_admin_stand(StandId, A) ->
                 case maybe_updates([
                         {<<"name">>, fun validate_nonempty_string/1},
                         {<<"x">>, fun validate_norm_coord/1},
-                        {<<"y">>, fun validate_norm_coord/1}
+                        {<<"y">>, fun validate_norm_coord/1},
+                        {<<"symbol">>, fun validate_symbol/1}
                     ], Body, Stand0) of
                     {error, Msg} ->
                         {error, Msg};
@@ -685,14 +690,16 @@ handle_v2_post_set_stands(Admin, SetId, A) ->
                 Name0 = maps:get(<<"name">>, Body, undefined),
                 X0 = maps:get(<<"x">>, Body, undefined),
                 Y0 = maps:get(<<"y">>, Body, undefined),
-                case {validate_nonempty_string(Name0), validate_norm_coord(X0), validate_norm_coord(Y0)} of
-                    {{ok, Name}, {ok, X}, {ok, Y}} ->
+                Sym0 = maps:get(<<"symbol">>, Body, undefined),
+                case {validate_nonempty_string(Name0), validate_norm_coord(X0), validate_norm_coord(Y0), validate_symbol(Sym0)} of
+                    {{ok, Name}, {ok, X}, {ok, Y}, {ok, Sym}} ->
                         Now = now_rfc3339(),
                         Stand = #{
                             <<"id">> => to_bin(uuid_v4()),
                             <<"name">> => Name,
                             <<"x">> => X,
                             <<"y">> => Y,
+                            <<"symbol">> => Sym,
                             <<"createdAt">> => Now,
                             <<"updatedAt">> => Now
                         },
@@ -726,7 +733,8 @@ handle_v2_patch_stand(Admin, SetId, StandId0, A) ->
                         Specs = [
                             {<<"name">>, fun validate_nonempty_string/1},
                             {<<"x">>, fun validate_norm_coord/1},
-                            {<<"y">>, fun validate_norm_coord/1}
+                            {<<"y">>, fun validate_norm_coord/1},
+                            {<<"symbol">>, fun validate_symbol/1}
                         ],
                         case maybe_updates(Specs, Body, Stand0) of
                             {ok, Stand1} ->
@@ -817,7 +825,8 @@ handle_v2_get_quiz(ShareId0, A) ->
                     Sample = take_n(shuffle(Stands0), Count),
                     VisibleDots = [#{<<"id">> => maps:get(<<"id">>, S),
                                      <<"x">> => maps:get(<<"x">>, S),
-                                     <<"y">> => maps:get(<<"y">>, S)} || S <- Sample],
+                                     <<"y">> => maps:get(<<"y">>, S),
+                                     <<"symbol">> => maps:get(<<"symbol">>, S, <<"dot">>)} || S <- Sample],
                     Questions = [#{<<"standId">> => maps:get(<<"id">>, S),
                                    <<"name">> => maps:get(<<"name">>, S)} || S <- Sample],
                     ImageUrl = <<"/api/v2/media/shares/", (to_bin(v2_norm_share_id(ShareId0)))/binary, "/image">>,
@@ -2099,6 +2108,28 @@ normalize_quiz_mode(<<"rand">>) -> <<"rand10">>;
 normalize_quiz_mode(B) when is_binary(B) -> normalize_quiz_mode(bin_trim(B));
 normalize_quiz_mode(L) when is_list(L) -> normalize_quiz_mode(list_to_binary(L));
 normalize_quiz_mode(_) -> <<"all">>.
+
+%% Stand symbol (UI-shape). Default: "dot"
+validate_symbol(undefined) -> {ok, <<"dot">>};
+validate_symbol(null) -> {ok, <<"dot">>};
+validate_symbol(<<>>) -> {ok, <<"dot">>};
+validate_symbol(B) when is_binary(B) ->
+    validate_symbol(bin_trim(B), B);
+validate_symbol(L) when is_list(L) ->
+    validate_symbol(list_to_binary(L));
+validate_symbol(_) ->
+    {error, <<"invalid_symbol">>}.
+
+validate_symbol(Bin0, _Orig) ->
+    Bin = bin_trim(Bin0),
+    case Bin of
+        <<"dot">> -> {ok, <<"dot">>};
+        <<"circle">> -> {ok, <<"dot">>}; %% alias
+        <<"square">> -> {ok, <<"square">>};
+        <<"triangle">> -> {ok, <<"triangle">>};
+        <<"cross">> -> {ok, <<"cross">>};
+        _ -> {error, <<"invalid_symbol">>}
+    end.
 
 sort_leaderboard(Items) ->
     %% Högre score först, sedan nyast först.

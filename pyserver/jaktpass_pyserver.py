@@ -232,6 +232,15 @@ def image_ext(filename: str) -> Optional[str]:
     return None
 
 
+def validate_symbol(sym: Any) -> str:
+    s = str(sym or "").strip().lower()
+    if not s or s == "dot" or s == "circle":
+        return "dot"
+    if s in ("square", "triangle", "cross"):
+        return s
+    return "dot"
+
+
 _SETID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -905,6 +914,7 @@ class Handler(BaseHTTPRequestHandler):
                         x = clamp01(body.get("x"))
                         y = clamp01(body.get("y"))
                         note = body.get("note")
+                        sym = validate_symbol(body.get("symbol"))
                         if not name or x is None or y is None:
                             return self._err(400, "invalid_payload", {"expected": "name + x + y (0..1)"})
                         try:
@@ -912,7 +922,7 @@ class Handler(BaseHTTPRequestHandler):
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         now = now_rfc3339()
-                        stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "createdAt": now, "updatedAt": now}
+                        stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "symbol": sym, "createdAt": now, "updatedAt": now}
                         if note is not None:
                             stand["note"] = str(note)
                         meta["stands"] = [stand] + (meta.get("stands") or [])
@@ -956,6 +966,8 @@ class Handler(BaseHTTPRequestHandler):
                             found["y"] = yv
                         if "note" in body:
                             found["note"] = str(body.get("note") or "")
+                        if "symbol" in body:
+                            found["symbol"] = validate_symbol(body.get("symbol"))
                         found["updatedAt"] = now_rfc3339()
                         meta["stands"] = [found] + rest
                         v2_save_set_meta(admin_id, set_id, meta)
@@ -994,7 +1006,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         count = 10
                     sample = shuffle_take(stands, count)
-                    visible = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y")} for s in sample]
+                    visible = [{"id": s.get("id"), "x": s.get("x"), "y": s.get("y"), "symbol": s.get("symbol") or "dot"} for s in sample]
                     questions = [{"standId": s.get("id"), "name": s.get("name")} for s in sample]
                     return self._ok({"mode": mode, "set": {"id": set_id, "name": (meta.get("set") or {}).get("name")}, "imageUrl": f"/api/v2/media/shares/{share_id}/image", "visibleStands": visible, "questions": questions})
 
@@ -1252,6 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
                 x = clamp01(body.get("x"))
                 y = clamp01(body.get("y"))
                 note = body.get("note")
+                sym = validate_symbol(body.get("symbol"))
                 if not name or x is None or y is None:
                     return self._err(400, "invalid_payload", {"expected": "name + x + y (0..1)"})
                 with with_set_lock(set_id):
@@ -1260,7 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
                     except FileNotFoundError:
                         return self._err(404, "set_not_found", {"setId": set_id})
                     now = now_rfc3339()
-                    stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "createdAt": now, "updatedAt": now}
+                    stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "symbol": sym, "createdAt": now, "updatedAt": now}
                     if note is not None:
                         stand["note"] = str(note)
                     meta["stands"] = [stand] + (meta.get("stands") or [])

@@ -244,6 +244,7 @@ function setAuthedUI(authed) {
 const v2state = {
   selectedSetId: null,
   moveStandId: null,
+  newSymbol: "dot",
 };
 
 function normClick(img, evt) {
@@ -347,7 +348,7 @@ function renderMapEditor(meta, setId) {
     [...map.querySelectorAll(".dot")].forEach((n) => n.remove());
     (meta.stands || []).forEach((s) => {
       const dot = document.createElement("div");
-      dot.className = "dot admin";
+      dot.className = `dot admin sym-${s.symbol || "dot"}`;
       dot.style.left = `${(s.x || 0) * 100}%`;
       dot.style.top = `${(s.y || 0) * 100}%`;
       map.appendChild(dot);
@@ -376,7 +377,8 @@ function renderMapEditor(meta, setId) {
     const name = prompt("Passnamn", "");
     if (!name || !name.trim()) return;
     try {
-      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: name.trim(), x, y } });
+      const sym = v2state.newSymbol || "dot";
+      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: name.trim(), x, y, symbol: sym } });
       toast("Skapat.");
       await renderAdmin();
     } catch {
@@ -576,6 +578,20 @@ async function renderAdmin() {
     up.className = "row";
     up.style.gap = "8px";
     up.style.alignItems = "center";
+    const sym = document.createElement("select");
+    [
+      ["dot", "Cirkel"],
+      ["square", "Fyrkant"],
+      ["triangle", "Triangel"],
+      ["cross", "Kryss"],
+    ].forEach(([v, t]) => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = t;
+      sym.appendChild(o);
+    });
+    sym.value = v2state.newSymbol || "dot";
+    sym.addEventListener("change", () => { v2state.newSymbol = sym.value; });
     const file = document.createElement("input");
     file.type = "file";
     file.accept = "image/png,image/jpeg,image/webp";
@@ -603,6 +619,7 @@ async function renderAdmin() {
       toast("Avbrutet.");
       await renderAdmin();
     });
+    up.appendChild(label("Symbol", sym));
     up.appendChild(file);
     up.appendChild(btnUp);
     up.appendChild(btnCancelMove);
@@ -694,7 +711,7 @@ async function renderQuiz(shareId) {
       map.appendChild(img);
       visible.forEach((s) => {
         const d = document.createElement("div");
-        d.className = "dot quiz";
+        d.className = `dot quiz sym-${s.symbol || "dot"}`;
         d.dataset.id = s.id;
         d.style.left = `${s.x * 100}%`;
         d.style.top = `${s.y * 100}%`;
