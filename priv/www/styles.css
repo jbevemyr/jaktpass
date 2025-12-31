@@ -159,6 +159,7 @@ button.danger { background: var(--danger); color: #0b0d10; }
   width: 0;
   height: 0;
   background: transparent;
+  border: none;
   border-left: 9px solid transparent;
   border-right: 9px solid transparent;
   border-bottom: 18px solid #ffffff;
@@ -166,18 +167,8 @@ button.danger { background: var(--danger); color: #0b0d10; }
   border-radius: 0;
   transform: translate(-50%, -65%);
 }
-.dot.sym-triangle.admin { border-bottom-color: #ffcf5c; border-left-color: transparent; border-right-color: transparent; }
-.dot.sym-triangle.quiz.correct1 { border-bottom-color: #43e6a8; }
-.dot.sym-triangle.quiz.correct2 { border-bottom-color: #ffd24d; }
-.dot.sym-triangle.quiz.correct3 { border-bottom-color: #ff9b3d; }
-.dot.sym-triangle.quiz.reveal   { border-bottom-color: #ff4d4d; }
-
-/* Kryss: ritas med pseudo-element */
-.dot.sym-cross {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-}
+/* Kryss: ritas med pseudo-element (måste även neutralisera .dot.admin/.dot.quiz bakgrund/border) */
+.dot.sym-cross { border: none; border-radius: 0; background: transparent; }
 .dot.sym-cross::before,
 .dot.sym-cross::after {
   content: "";
@@ -203,21 +194,58 @@ button.danger { background: var(--danger); color: #0b0d10; }
 .dot.sym-cross.quiz.reveal::before,
 .dot.sym-cross.quiz.reveal::after   { background:#ff4d4d; }
 
-/* Stjärna: rita som "asterisk" med 3 linjer (via gradients) */
+/* Stjärna: rita som "asterisk" med 3 linjer (via gradients). */
 .dot.sym-star {
   border: none;
-  background: transparent;
   border-radius: 0;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  background: transparent;
   --sym-color: #ffffff;
   background:
     linear-gradient(0deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
     linear-gradient(60deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
     linear-gradient(120deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%);
-  transform: translate(-50%, -50%);
 }
-.dot.sym-star.admin { --sym-color: #ffcf5c; }
+
+/* --- Viktigt: symboler måste vinna över .dot.admin och .dot.quiz.correct* --- */
+.dot.sym-triangle.admin {
+  background: transparent;
+  border: none;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 18px solid #ffcf5c;
+}
+.dot.sym-triangle.quiz {
+  background: transparent;
+  border: none;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 18px solid #ffffff;
+}
+.dot.sym-triangle.quiz.correct1 { border-bottom-color: #43e6a8; }
+.dot.sym-triangle.quiz.correct2 { border-bottom-color: #ffd24d; }
+.dot.sym-triangle.quiz.correct3 { border-bottom-color: #ff9b3d; }
+.dot.sym-triangle.quiz.reveal   { border-bottom-color: #ff4d4d; }
+
+.dot.sym-cross.admin,
+.dot.sym-cross.quiz,
+.dot.sym-cross.quiz.correct1,
+.dot.sym-cross.quiz.correct2,
+.dot.sym-cross.quiz.correct3,
+.dot.sym-cross.quiz.reveal {
+  background: transparent;
+  border: none;
+}
+
+.dot.sym-star.admin { --sym-color: #ffcf5c; border: none; background:
+    linear-gradient(0deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(60deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(120deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%); }
+.dot.sym-star.quiz { border: none; background:
+    linear-gradient(0deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(60deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%),
+    linear-gradient(120deg, transparent 44%, var(--sym-color) 44%, var(--sym-color) 56%, transparent 56%); }
 .dot.sym-star.quiz.correct1 { --sym-color: #43e6a8; }
 .dot.sym-star.quiz.correct2 { --sym-color: #ffd24d; }
 .dot.sym-star.quiz.correct3 { --sym-color: #ff9b3d; }
