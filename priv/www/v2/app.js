@@ -387,6 +387,160 @@ function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) 
   });
 }
 
+function getOrCreateStandEditModal() {
+  let m = document.querySelector("#v2-stand-edit-modal");
+  if (m) return m;
+
+  m = document.createElement("div");
+  m.id = "v2-stand-edit-modal";
+  m.className = "modal";
+  m.style.display = "none";
+  m.setAttribute("aria-hidden", "true");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.textContent = "Redigera punkt";
+
+  const name = document.createElement("input");
+  name.id = "v2-stand-edit-name";
+  name.placeholder = "Punktnamn";
+
+  const symWrap = document.createElement("div");
+  symWrap.id = "v2-stand-edit-symbol";
+  symWrap.className = "sym-choice";
+
+  const btnSave = document.createElement("button");
+  btnSave.id = "v2-stand-edit-save";
+  btnSave.textContent = "Spara";
+
+  const btnDelete = document.createElement("button");
+  btnDelete.id = "v2-stand-edit-delete";
+  btnDelete.className = "secondary";
+  btnDelete.textContent = "Radera";
+
+  const btnCancel = document.createElement("button");
+  btnCancel.id = "v2-stand-edit-cancel";
+  btnCancel.className = "secondary";
+  btnCancel.textContent = "Avbryt";
+
+  const r1 = document.createElement("div");
+  r1.className = "row";
+  r1.style.gap = "8px";
+  r1.appendChild(label("Namn", name));
+
+  const rSym = document.createElement("div");
+  rSym.appendChild(Object.assign(document.createElement("div"), { className: "small", textContent: "Symbol" }));
+  rSym.appendChild(symWrap);
+
+  const r2 = document.createElement("div");
+  r2.className = "row";
+  r2.style.justifyContent = "space-between";
+  r2.style.gap = "8px";
+  r2.appendChild(btnDelete);
+  const right = document.createElement("div");
+  right.className = "row";
+  right.style.gap = "8px";
+  right.appendChild(btnCancel);
+  right.appendChild(btnSave);
+  r2.appendChild(right);
+
+  card.appendChild(title);
+  card.appendChild(r1);
+  card.appendChild(rSym);
+  card.appendChild(r2);
+
+  m.appendChild(backdrop);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  return m;
+}
+
+function showStandEditModal({ standName = "", standSymbol = "dot" } = {}) {
+  const m = getOrCreateStandEditModal();
+  const name = document.querySelector("#v2-stand-edit-name");
+  const symWrap = document.querySelector("#v2-stand-edit-symbol");
+  const btnSave = document.querySelector("#v2-stand-edit-save");
+  const btnDelete = document.querySelector("#v2-stand-edit-delete");
+  const btnCancel = document.querySelector("#v2-stand-edit-cancel");
+  const backdrop = m.querySelector(".modal-backdrop");
+
+  name.value = standName || "";
+  let selected = standSymbol || "dot";
+
+  // render symbol buttons
+  symWrap.innerHTML = "";
+  const symbols = [
+    ["dot", "Cirkel"],
+    ["square", "Fyrkant"],
+    ["triangle", "Triangel"],
+    ["star", "Stjärna"],
+  ];
+  const btns = [];
+  symbols.forEach(([v, labelTxt]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = v === selected ? "active" : "";
+    const preview = document.createElement("div");
+    preview.className = `dot sym-${v}`;
+    preview.classList.add("admin");
+    const txt = document.createElement("span");
+    txt.textContent = labelTxt;
+    b.appendChild(preview);
+    b.appendChild(txt);
+    b.addEventListener("click", () => {
+      selected = v;
+      btns.forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+    });
+    btns.push(b);
+    symWrap.appendChild(b);
+  });
+
+  m.style.display = "";
+  m.setAttribute("aria-hidden", "false");
+  setTimeout(() => name.focus(), 0);
+
+  return new Promise((resolve) => {
+    const close = (val) => {
+      m.style.display = "none";
+      m.setAttribute("aria-hidden", "true");
+      btnSave.onclick = null;
+      btnDelete.onclick = null;
+      btnCancel.onclick = null;
+      backdrop.onclick = null;
+      name.onkeydown = null;
+      resolve(val);
+    };
+    backdrop.onclick = () => close(null);
+    btnCancel.onclick = () => close(null);
+    btnSave.onclick = () => {
+      const nm = (name.value || "").trim();
+      if (!nm) return toast("Ange namn.");
+      close({ action: "save", name: nm, symbol: selected });
+    };
+    btnDelete.onclick = () => {
+      if (!confirm("Radera punkten?")) return;
+      close({ action: "delete" });
+    };
+    name.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnSave.click();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      }
+    };
+  });
+}
+
 function normClick(img, evt) {
   const rect = img.getBoundingClientRect();
   const w = rect.width || 0;
@@ -494,13 +648,98 @@ function renderMapEditor(meta, setId) {
   img.draggable = false;
   map.appendChild(img);
 
+  const standById = {};
+  asArray(meta.stands).forEach((s) => { if (s && s.id) standById[s.id] = s; });
+
+  let drag = null; // { id, pointerId, startX, startY, moved, x, y }
+
   function renderDots() {
     [...map.querySelectorAll(".dot")].forEach((n) => n.remove());
     asArray(meta.stands).forEach((s) => {
       const dot = document.createElement("div");
       dot.className = `dot admin sym-${s.symbol || "dot"}`;
+      dot.dataset.id = s.id;
       dot.style.left = `${(s.x || 0) * 100}%`;
       dot.style.top = `${(s.y || 0) * 100}%`;
+
+      const onOpenEdit = async () => {
+        if (!s?.id) return;
+        const r = await showStandEditModal({ standName: s.name || "", standSymbol: s.symbol || "dot" });
+        if (!r) return;
+        if (r.action === "delete") {
+          try {
+            await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+            toast("Raderat.");
+            await renderAdmin();
+          } catch {
+            toast("Kunde inte radera.");
+          }
+          return;
+        }
+        if (r.action === "save") {
+          try {
+            await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(s.id)}`, { method: "PATCH", jsonBody: { name: r.name, symbol: r.symbol } });
+            toast("Uppdaterat.");
+            await renderAdmin();
+          } catch {
+            toast("Kunde inte uppdatera.");
+          }
+        }
+      };
+
+      dot.addEventListener("pointerdown", (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        dot.setPointerCapture(evt.pointerId);
+        drag = { id: s.id, pointerId: evt.pointerId, startX: evt.clientX, startY: evt.clientY, moved: false, x: s.x, y: s.y };
+      });
+
+      dot.addEventListener("pointermove", (evt) => {
+        if (!drag) return;
+        if (drag.pointerId !== evt.pointerId) return;
+        const dx = evt.clientX - drag.startX;
+        const dy = evt.clientY - drag.startY;
+        if (!drag.moved && (Math.abs(dx) + Math.abs(dy) > 4)) drag.moved = true;
+        const { x, y } = normClick(img, evt);
+        if (x == null || y == null) return;
+        drag.x = x; drag.y = y;
+        dot.style.left = `${x * 100}%`;
+        dot.style.top = `${y * 100}%`;
+      });
+
+      dot.addEventListener("pointerup", async (evt) => {
+        if (!drag || drag.pointerId !== evt.pointerId) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        try { dot.releasePointerCapture(evt.pointerId); } catch {}
+
+        const moved = !!drag.moved;
+        const newX = drag.x;
+        const newY = drag.y;
+        const standId = drag.id;
+        drag = null;
+
+        if (!moved) {
+          await onOpenEdit();
+          return;
+        }
+        try {
+          await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(standId)}`, { method: "PATCH", jsonBody: { x: newX, y: newY } });
+          toast("Flyttat.");
+          await renderAdmin();
+        } catch {
+          toast("Kunde inte flytta.");
+          await renderAdmin();
+        }
+      });
+
+      dot.addEventListener("pointercancel", async (evt) => {
+        if (!drag || drag.pointerId !== evt.pointerId) return;
+        drag = null;
+        try { dot.releasePointerCapture(evt.pointerId); } catch {}
+        await renderAdmin();
+      });
+
       map.appendChild(dot);
     });
   }
