@@ -239,6 +239,8 @@ async function ensureMe() {
 
 function setAuthedUI(authed) {
   $("#v2-nav-logout").style.display = authed ? "" : "none";
+  $("#v2-nav-login").style.display = authed ? "none" : "";
+  $("#v2-nav-register").style.display = authed ? "none" : "";
 }
 
 const v2state = {
@@ -246,6 +248,111 @@ const v2state = {
   moveStandId: null,
   newSymbol: "dot",
 };
+
+function getOrCreateStandCreateModal() {
+  let m = document.querySelector("#v2-stand-create-modal");
+  if (m) return m;
+
+  m = document.createElement("div");
+  m.id = "v2-stand-create-modal";
+  m.className = "modal";
+  m.style.display = "none";
+  m.setAttribute("aria-hidden", "true");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = document.createElement("h3");
+  title.textContent = "Skapa pass";
+
+  const name = document.createElement("input");
+  name.id = "v2-stand-create-name";
+  name.placeholder = "Passnamn";
+
+  const sym = document.createElement("select");
+  sym.id = "v2-stand-create-symbol";
+  [
+    ["dot", "Cirkel"],
+    ["square", "Fyrkant"],
+    ["triangle", "Triangel"],
+    ["cross", "Kryss"],
+  ].forEach(([v, t]) => {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = t;
+    sym.appendChild(o);
+  });
+
+  const btnOk = document.createElement("button");
+  btnOk.id = "v2-stand-create-ok";
+  btnOk.textContent = "Skapa";
+  const btnCancel = document.createElement("button");
+  btnCancel.className = "secondary";
+  btnCancel.id = "v2-stand-create-cancel";
+  btnCancel.textContent = "Avbryt";
+
+  const r1 = document.createElement("div");
+  r1.className = "row";
+  r1.style.gap = "8px";
+  r1.appendChild(label("Namn", name));
+  r1.appendChild(label("Symbol", sym));
+
+  const r2 = document.createElement("div");
+  r2.className = "row";
+  r2.style.justifyContent = "flex-end";
+  r2.style.gap = "8px";
+  r2.appendChild(btnCancel);
+  r2.appendChild(btnOk);
+
+  card.appendChild(title);
+  card.appendChild(r1);
+  card.appendChild(r2);
+
+  m.appendChild(backdrop);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  return m;
+}
+
+function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) {
+  const m = getOrCreateStandCreateModal();
+  const name = document.querySelector("#v2-stand-create-name");
+  const sym = document.querySelector("#v2-stand-create-symbol");
+  const btnOk = document.querySelector("#v2-stand-create-ok");
+  const btnCancel = document.querySelector("#v2-stand-create-cancel");
+  const backdrop = m.querySelector(".modal-backdrop");
+
+  name.value = defaultName || "";
+  sym.value = defaultSymbol || "dot";
+
+  m.style.display = "";
+  m.setAttribute("aria-hidden", "false");
+  setTimeout(() => name.focus(), 0);
+
+  return new Promise((resolve) => {
+    const close = (val) => {
+      m.style.display = "none";
+      m.setAttribute("aria-hidden", "true");
+      btnOk.onclick = null;
+      btnCancel.onclick = null;
+      backdrop.onclick = null;
+      resolve(val);
+    };
+    backdrop.onclick = () => close(null);
+    btnCancel.onclick = () => close(null);
+    btnOk.onclick = () => {
+      const nm = (name.value || "").trim();
+      if (!nm) return toast("Ange namn.");
+      const s = (sym.value || "dot").trim();
+      close({ name: nm, symbol: s });
+    };
+  });
+}
 
 function normClick(img, evt) {
   const rect = img.getBoundingClientRect();
@@ -374,11 +481,11 @@ function renderMapEditor(meta, setId) {
       return;
     }
 
-    const name = prompt("Passnamn", "");
-    if (!name || !name.trim()) return;
+    const r = await showStandCreateModal({ defaultName: "", defaultSymbol: v2state.newSymbol || "dot" });
+    if (!r) return;
     try {
-      const sym = v2state.newSymbol || "dot";
-      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: name.trim(), x, y, symbol: sym } });
+      v2state.newSymbol = r.symbol || "dot";
+      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: r.name, x, y, symbol: r.symbol || "dot" } });
       toast("Skapat.");
       await renderAdmin();
     } catch {
@@ -578,20 +685,6 @@ async function renderAdmin() {
     up.className = "row";
     up.style.gap = "8px";
     up.style.alignItems = "center";
-    const sym = document.createElement("select");
-    [
-      ["dot", "Cirkel"],
-      ["square", "Fyrkant"],
-      ["triangle", "Triangel"],
-      ["cross", "Kryss"],
-    ].forEach(([v, t]) => {
-      const o = document.createElement("option");
-      o.value = v;
-      o.textContent = t;
-      sym.appendChild(o);
-    });
-    sym.value = v2state.newSymbol || "dot";
-    sym.addEventListener("change", () => { v2state.newSymbol = sym.value; });
     const file = document.createElement("input");
     file.type = "file";
     file.accept = "image/png,image/jpeg,image/webp";
@@ -619,7 +712,6 @@ async function renderAdmin() {
       toast("Avbrutet.");
       await renderAdmin();
     });
-    up.appendChild(label("Symbol", sym));
     up.appendChild(file);
     up.appendChild(btnUp);
     up.appendChild(btnCancelMove);
