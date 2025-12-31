@@ -837,11 +837,29 @@ async function renderQuiz(shareId) {
       const visible = pack?.visibleStands || [];
       const nameById = {};
       questions.forEach((it) => { nameById[it.standId] = it.name; });
+      const standById = {};
+      visible.forEach((s) => { standById[s.id] = s; });
 
       let idx = 0;
       const solved = new Set();
       let mistakes = 0;
       let wrongThis = 0;
+
+      function showTempLabel(standId) {
+        const s = standById[standId];
+        if (!s) return;
+        const txt = nameById[standId] || "Punkt";
+        // Rensa tidigare temp-label för samma punkt
+        [...map.querySelectorAll(`.map-label.temp[data-id="${standId}"]`)].forEach((n) => n.remove());
+        const lab = document.createElement("div");
+        lab.className = "map-label temp";
+        lab.dataset.id = standId;
+        lab.textContent = txt;
+        lab.style.left = `${(s.x || 0) * 100}%`;
+        lab.style.top = `${(s.y || 0) * 100}%`;
+        map.appendChild(lab);
+        setTimeout(() => { try { lab.remove(); } catch {} }, 1100);
+      }
 
       function setQuestionText() {
         if (!questions.length) {
@@ -878,6 +896,7 @@ async function renderQuiz(shareId) {
           const want = questions[idx].standId;
           const got = s.id;
           if (got === want) {
+            showTempLabel(got);
             solved.add(got);
             d.classList.add(wrongThis === 0 ? "correct1" : (wrongThis === 1 ? "correct2" : "correct3"));
             wrongThis = 0;
@@ -888,11 +907,12 @@ async function renderQuiz(shareId) {
               wrongThis += 1;
               mistakes += 1;
             }
-            toast(`Fel: ${(nameById[got] || "punkt")}`);
+            showTempLabel(got);
             if (wrongThis >= 3) {
               // Efter 3 fel: markera rätt prick röd och gå vidare
               const wantEl = map.querySelector(`.dot[data-id="${want}"]`);
               if (wantEl) wantEl.classList.add("reveal");
+              showTempLabel(want);
               wrongThis = 0;
               idx += 1;
               setQuestionText();
