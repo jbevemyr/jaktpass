@@ -516,33 +516,43 @@ handle_v2_login(A) ->
         {ok, Body} ->
             Email0 = maps:get(<<"email">>, Body, undefined),
             Pass0 = maps:get(<<"password">>, Body, undefined),
+            v2_auth_dbg("login body email_type=~p pass_type=~p", [type_tag(Email0), type_tag(Pass0)]),
             case {validate_email(Email0), validate_password(Pass0)} of
                 {{ok, Email}, {ok, Pass}} ->
+                    v2_auth_dbg("login validate ok email=~p pass_bytes=~p", [Email, byte_size(Pass)]),
                     v2_with_lock(fun() ->
                         case v2_lookup_admin_by_email(Email) of
                             {ok, AdminId} ->
+                                v2_auth_dbg("login found adminId=~p", [AdminId]),
                                 case v2_load_admin(AdminId) of
                                     {ok, Admin} ->
+                                        v2_auth_dbg("login loaded admin ok keys=~p", [maps:keys(Admin)]),
                                         case v2_password_verify(Pass, Admin) of
                                             true ->
+                                                v2_auth_dbg("login password_verify=true", []),
                                                 {SessTok, SessHdr} = v2_new_session(AdminId),
                                                 json_ok_headers(200,
                                                     #{<<"admin">> => v2_admin_public(Admin), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
                                                     [SessHdr]);
                                             false ->
+                                                v2_auth_dbg("login password_verify=false", []),
                                                 v2_unauthorized()
                                         end;
                                     _ ->
+                                        v2_auth_dbg("login failed to load admin", []),
                                         v2_unauthorized()
                                 end;
                             not_found ->
+                                v2_auth_dbg("login email not_found", []),
                                 v2_unauthorized()
                         end
                     end);
                 _ ->
+                    v2_auth_dbg("login validate failed", []),
                     v2_unauthorized()
             end;
         _ ->
+            v2_auth_dbg("login invalid_json", []),
             v2_unauthorized()
     end.
 
@@ -2040,6 +2050,21 @@ multipart_dbg(Fmt, Args) ->
         _ -> ok
     end.
 
+v2_auth_dbg(Fmt, Args) ->
+    case getenv_default("JAKTPASS_DEBUG_V2_AUTH", "false") of
+        "1" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
+        "true" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
+        "yes" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
+        _ -> ok
+    end.
+
+type_tag(V) when is_binary(V) -> binary;
+type_tag(V) when is_list(V) -> list;
+type_tag(V) when is_atom(V) -> atom;
+type_tag(V) when is_integer(V) -> integer;
+type_tag(V) when is_map(V) -> map;
+type_tag(_) -> other.
+
 validate_nonempty_string(undefined) -> {error, <<"missing">>};
 validate_nonempty_string(null) -> {error, <<"missing">>};
 validate_nonempty_string(B) when is_binary(B) ->
@@ -2358,9 +2383,15 @@ v2_password_verify(PassBin, Admin) ->
     SaltB64 = maps:get(<<"salt">>, Pw, <<>>),
     HashB64 = maps:get(<<"hash">>, Pw, <<>>),
     %% OTP22 + vår JSON-decoder kan ge listor för strängar → säkerställ binary före base64-decode.
-    Salt = try base64:decode(to_bin(SaltB64)) catch _:_ -> <<>> end,
-    Want = try base64:decode(to_bin(HashB64)) catch _:_ -> <<>> end,
+    SaltBinB64 = to_bin(SaltB64),
+    HashBinB64 = to_bin(HashB64),
+    Salt = try base64:decode(SaltBinB64) catch _:_ -> <<>> end,
+    Want = try base64:decode(HashBinB64) catch _:_ -> <<>> end,
+    UsePbkdf2 = erlang:function_exported(crypto, pbkdf2_hmac, 5),
+    v2_auth_dbg("pwverify salt_b64_type=~p hash_b64_type=~p salt_b64_bytes=~p hash_b64_bytes=~p salt_bytes=~p want_bytes=~p pbkdf2=~p",
+                [type_tag(SaltB64), type_tag(HashB64), byte_size(SaltBinB64), byte_size(HashBinB64), byte_size(Salt), byte_size(Want), UsePbkdf2]),
     Got = v2_password_hash(to_bin(PassBin), Salt),
+    v2_auth_dbg("pwverify got_bytes=~p match=~p", [byte_size(Got), Got =:= Want]),
     Got =:= Want.
 
 v2_cookie_name() -> "jaktpass_v2".
