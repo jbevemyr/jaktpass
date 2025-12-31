@@ -272,7 +272,7 @@ function getOrCreateStandCreateModal() {
 
   const name = document.createElement("input");
   name.id = "v2-stand-create-name";
-  name.placeholder = "Passnamn";
+  name.placeholder = "Punktnamn";
 
   const symWrap = document.createElement("div");
   symWrap.id = "v2-stand-create-symbol";
@@ -365,6 +365,7 @@ function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) 
       btnOk.onclick = null;
       btnCancel.onclick = null;
       backdrop.onclick = null;
+      name.onkeydown = null;
       resolve(val);
     };
     backdrop.onclick = () => close(null);
@@ -373,6 +374,15 @@ function showStandCreateModal({ defaultName = "", defaultSymbol = "dot" } = {}) 
       const nm = (name.value || "").trim();
       if (!nm) return toast("Ange namn.");
       close({ name: nm, symbol: selected });
+    };
+    name.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnOk.click();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      }
     };
   });
 }
