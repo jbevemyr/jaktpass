@@ -295,9 +295,9 @@ function setQuizMode(mode) {
 }
 
 function modeLabel(mode) {
-  if (mode === "rand10") return "10 pass (slump)";
+  if (mode === "rand10") return "10 punkter (slump)";
   if (mode === "randHalf") return "Hälften (slump)";
-  return "Alla pass";
+  return "Alla punkter";
 }
 
 async function fetchLeaderboard(setId, mode) {
@@ -560,7 +560,7 @@ async function showMapPreview(setId) {
     if (mapEl) mapEl.innerHTML = "";
     return;
   }
-  if (hint) hint.textContent = "Alla pass (med namn).";
+  if (hint) hint.textContent = "Alla punkter (med namn).";
 
   const stands = meta.stands || [];
   const dots = stands.map((s) => ({ x: s.x, y: s.y, className: "quiz" }));
@@ -714,7 +714,7 @@ async function generatePdfForSet(setId) {
     }
     const stands = meta.stands || [];
     if (!stands.length) {
-      showToast("Inga pass i detta set.");
+      showToast("Inga punkter i detta set.");
       return;
     }
 

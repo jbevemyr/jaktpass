@@ -268,7 +268,7 @@ function getOrCreateStandCreateModal() {
   card.setAttribute("aria-modal", "true");
 
   const title = document.createElement("h3");
-  title.textContent = "Skapa pass";
+  title.textContent = "Skapa punkt";
 
   const name = document.createElement("input");
   name.id = "v2-stand-create-name";
@@ -436,7 +436,7 @@ function standRow(setId, stand) {
   btnDel.className = "danger";
   btnDel.textContent = "Radera";
   btnDel.addEventListener("click", async () => {
-    if (!confirm("Radera pass?")) return;
+    if (!confirm("Radera punkt?")) return;
     try {
       await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(stand.id)}`, { method: "DELETE" });
       toast("Raderat.");
@@ -463,7 +463,7 @@ function renderMapEditor(meta, setId) {
 
   const imageUrl = meta?.imageUrl;
   if (!imageUrl) {
-    map.appendChild(pSmall("Ladda upp en bild för att kunna placera pass på kartan."));
+    map.appendChild(pSmall("Ladda upp en bild för att kunna placera punkter på kartan."));
     return map;
   }
 
@@ -575,7 +575,7 @@ function setRow(setObj) {
   const d = document.createElement("div");
   d.className = `set-row ${v2state.selectedSetId === setObj.id ? "selected" : ""}`.trim();
 
-  // Klick på raden väljer set för "Bild & pass"
+  // Klick på raden väljer set för "Bild & punkter"
   d.addEventListener("click", async () => {
     v2state.selectedSetId = setObj.id;
     v2state.moveStandId = null;
@@ -692,7 +692,7 @@ async function renderAdmin() {
 
     const sec = document.createElement("div");
     sec.style.marginTop = "14px";
-    sec.appendChild(h2("Bild & pass"));
+    sec.appendChild(h2("Bild & punkter"));
 
     const sel = document.createElement("select");
     sets.forEach((s) => {
@@ -756,8 +756,8 @@ async function renderAdmin() {
       sec.appendChild(renderMapEditor(meta, v2state.selectedSetId));
 
       const stands = meta.stands || [];
-      sec.appendChild(h2(`Pass (${stands.length})`));
-      if (!stands.length) sec.appendChild(pSmall("Inga pass ännu. Klicka på kartan för att skapa."));
+      sec.appendChild(h2(`Punkter (${stands.length})`));
+      if (!stands.length) sec.appendChild(pSmall("Inga punkter ännu. Klicka på kartan för att skapa."));
       else stands.forEach((s) => sec.appendChild(standRow(v2state.selectedSetId, s)));
     } else {
       sec.appendChild(pSmall("Kunde inte läsa set-data."));
@@ -778,7 +778,7 @@ async function renderQuiz(shareId) {
   ["rand10", "randHalf", "all"].forEach((m) => {
     const o = document.createElement("option");
     o.value = m;
-    o.textContent = m === "rand10" ? "10 pass" : (m === "randHalf" ? "Hälften" : "Alla");
+    o.textContent = m === "rand10" ? "10 punkter" : (m === "randHalf" ? "Hälften" : "Alla");
     mode.appendChild(o);
   });
 
@@ -815,7 +815,7 @@ async function renderQuiz(shareId) {
 
       function setQuestionText() {
         if (!questions.length) {
-          q.textContent = "Inga pass i detta set.";
+          q.textContent = "Inga punkter i detta set.";
           return;
         }
         if (idx >= questions.length) {
@@ -858,7 +858,7 @@ async function renderQuiz(shareId) {
               wrongThis += 1;
               mistakes += 1;
             }
-            toast(`Fel: ${(nameById[got] || "pass")}`);
+            toast(`Fel: ${(nameById[got] || "punkt")}`);
             if (wrongThis >= 3) {
               // Efter 3 fel: markera rätt prick röd och gå vidare
               const wantEl = map.querySelector(`.dot[data-id="${want}"]`);

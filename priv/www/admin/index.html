@@ -48,8 +48,8 @@
 
           <div class="split">
             <div class="card">
-              <h3>Pass (stands)</h3>
-              <div class="hint">Klicka i bilden för att fylla x/y (normaliserat). Skapa sedan stand.</div>
+              <h3>Punkter</h3>
+              <div class="hint">Klicka i bilden för att fylla x/y (normaliserat). Skapa sedan en punkt.</div>
               <div class="row">
                 <label>Namn <input id="stand-name" type="text" /></label>
                 <label>X <input id="stand-x" type="number" step="0.0001" min="0" max="1" /></label>
@@ -84,12 +84,12 @@
             <div class="row">
               <div class="pill">Quiz-typ:</div>
               <div class="segmented" role="group" aria-label="Quiz-typ">
-                <button id="mode-rand10" class="seg-btn">10 pass</button>
+                <button id="mode-rand10" class="seg-btn">10 punkter</button>
                 <button id="mode-randHalf" class="seg-btn">Hälften</button>
                 <button id="mode-all" class="seg-btn">Alla</button>
               </div>
             </div>
-            <div class="hint">Välj hur många pass du vill köra, välj sedan ett set och tryck Start.</div>
+            <div class="hint">Välj hur många punkter du vill köra, välj sedan ett set och tryck Start.</div>
             <div id="quiz-set-list" class="set-list"></div>
           </div>
 
@@ -99,7 +99,7 @@
                 <button id="quiz-back" class="secondary">Tillbaka</button>
                 <div class="quiz-head">
                   <div class="quiz-question">Hitta: <span id="quiz-question">-</span></div>
-                  <div class="quiz-instr">Klicka på rätt prick på kartan. Alla prickar är pass.</div>
+                  <div class="quiz-instr">Klicka på rätt prick på kartan. Alla prickar är punkter.</div>
                 </div>
               </div>
             </div>
