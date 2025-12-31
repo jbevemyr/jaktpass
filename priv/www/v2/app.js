@@ -538,7 +538,7 @@ async function renderLogin() {
   pass.placeholder = "Lösenord";
   const btn = document.createElement("button");
   btn.textContent = "Logga in";
-  btn.addEventListener("click", async () => {
+  async function doLogin() {
     try {
       await api("/api/v2/login", { method: "POST", jsonBody: { email: email.value, password: pass.value } });
       toast("Inloggad.");
@@ -546,7 +546,17 @@ async function renderLogin() {
     } catch (e) {
       toast("Fel inloggning.");
     }
-  });
+  }
+  btn.addEventListener("click", doLogin);
+
+  const onKey = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doLogin();
+    }
+  };
+  email.addEventListener("keydown", onKey);
+  pass.addEventListener("keydown", onKey);
 
   const wrap = document.createElement("div");
   wrap.appendChild(h2("Logga in"));
