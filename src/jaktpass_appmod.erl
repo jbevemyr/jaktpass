@@ -2433,7 +2433,9 @@ v2_delete_session(A) ->
     end.
 
 v2_current_admin(A) ->
-    case v2_get_cookie(A#arg.headers, v2_cookie_name()) of
+    Tok0 = v2_get_cookie(A#arg.headers, v2_cookie_name()),
+    v2_auth_dbg("me cookie_tok_present=~p cookie_repr=~p", [Tok0 =/= undefined, v2_cookie_repr(A#arg.headers)]),
+    case Tok0 of
         undefined -> error;
         Tok ->
             Path = v2_session_path(Tok),
@@ -2454,16 +2456,42 @@ v2_current_admin(A) ->
                         error
                     end;
                 _ ->
+                    v2_auth_dbg("me session_not_found tok_prefix=~p path=~p", [v2_tok_prefix(Tok), Path]),
                     error
             end
     end.
 
 v2_get_cookie(H, Name) when is_record(H, headers) ->
-    %% cookie kan vara lista av #cookie{} eller {Key,Val}
+    %% Försök först Yaws inbyggda cookie-hjälp (mer robust mellan versioner)
     Cookies = H#headers.cookie,
-    v2_get_cookie_loop(Cookies, Name);
+    case erlang:function_exported(yaws_api, find_cookie_val, 2) of
+        true ->
+            try
+                case yaws_api:find_cookie_val(Name, Cookies) of
+                    [] -> v2_get_cookie_fallback(H, Name);
+                    undefined -> v2_get_cookie_fallback(H, Name);
+                    V when is_list(V); is_binary(V) -> v2_cookie_to_token(V);
+                    _ -> v2_get_cookie_fallback(H, Name)
+                end
+            catch _:_ ->
+                v2_get_cookie_fallback(H, Name)
+            end;
+        false ->
+            v2_get_cookie_fallback(H, Name)
+    end;
 v2_get_cookie(_, _) ->
     undefined.
+
+v2_get_cookie_fallback(H, Name) ->
+    %% 1) vår tidigare loop över parsed cookies
+    case v2_get_cookie_loop(H#headers.cookie, Name) of
+        undefined ->
+            %% 2) fallback: parsa raw Cookie-header om Yaws inte fyllde H#headers.cookie
+            Raw = header_value(H, "cookie"),
+            v2_parse_cookie_header(Raw, Name);
+        V ->
+            v2_cookie_to_token(V)
+    end.
 
 v2_get_cookie_loop([], _Name) -> undefined;
 v2_get_cookie_loop([C | Rest], Name) ->
@@ -2475,6 +2503,46 @@ v2_get_cookie_loop([C | Rest], Name) ->
         _ ->
             v2_get_cookie_loop(Rest, Name)
     end.
+
+v2_cookie_to_token(V) when is_binary(V) -> binary_to_list(V);
+v2_cookie_to_token(V) when is_list(V) -> V;
+v2_cookie_to_token(_) -> undefined.
+
+v2_parse_cookie_header(undefined, _Name) -> undefined;
+v2_parse_cookie_header(Bin, Name) when is_binary(Bin) ->
+    v2_parse_cookie_header(binary_to_list(Bin), Name);
+v2_parse_cookie_header(Str, Name) when is_list(Str) ->
+    %% Ex: "a=b; jaktpass_v2=tok; c=d"
+    Parts = [string:trim(P) || P <- string:tokens(Str, ";")],
+    v2_parse_cookie_parts(Parts, Name);
+v2_parse_cookie_header(_, _) ->
+    undefined.
+
+v2_parse_cookie_parts([], _Name) -> undefined;
+v2_parse_cookie_parts([P | Rest], Name) ->
+    case string:tokens(P, "=") of
+        [K, V] ->
+            case string:trim(K) =:= Name of
+                true -> string:trim(V);
+                false -> v2_parse_cookie_parts(Rest, Name)
+            end;
+        _ -> v2_parse_cookie_parts(Rest, Name)
+    end.
+
+v2_tok_prefix(Tok) when is_list(Tok) ->
+    lists:sublist(Tok, 6);
+v2_tok_prefix(_Tok) ->
+    "".
+
+v2_cookie_repr(H) when is_record(H, headers) ->
+    %% Lätt debug för att se om cookies ens kommer in
+    C = H#headers.cookie,
+    case C of
+        [] -> {empty, header_value(H, "cookie")};
+        _ -> {parsed, length(C)}
+    end;
+v2_cookie_repr(_H) ->
+    undefined.
 
 base64url_encode(Bin) ->
     Enc0 = binary_to_list(base64:encode(Bin)),
