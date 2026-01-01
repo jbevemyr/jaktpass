@@ -558,6 +558,12 @@ function asArray(v) {
   return [];
 }
 
+function cacheBustUrl(url, token) {
+  if (!url) return url;
+  const t = encodeURIComponent(String(token || Date.now()));
+  return url + (url.includes("?") ? "&" : "?") + "v=" + t;
+}
+
 async function fetchSet(setId) {
   const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
   const data = r?.data || null;
@@ -643,7 +649,7 @@ function renderMapEditor(meta, setId) {
 
   map.classList.add("has-image");
   const img = document.createElement("img");
-  img.src = imageUrl;
+  img.src = cacheBustUrl(imageUrl, meta?.image?.uploadedAt || Date.now());
   img.alt = "Karta";
   img.draggable = false;
   map.appendChild(img);
