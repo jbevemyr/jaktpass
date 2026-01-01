@@ -564,6 +564,11 @@ function cacheBustUrl(url, token) {
   return url + (url.includes("?") ? "&" : "?") + "v=" + t;
 }
 
+function displayStandName(name) {
+  const s = String(name || "").trim();
+  return s.replace(/^(pass)\s+/i, "").trim();
+}
+
 async function fetchSet(setId) {
   const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
   const data = r?.data || null;
@@ -660,8 +665,17 @@ function renderMapEditor(meta, setId) {
   let drag = null; // { id, pointerId, startX, startY, moved, x, y }
 
   function renderDots() {
-    [...map.querySelectorAll(".dot")].forEach((n) => n.remove());
+    [...map.querySelectorAll(".dot, .map-label")].forEach((n) => n.remove());
     asArray(meta.stands).forEach((s) => {
+      // Label (namn) ovanför punkten
+      const lab = document.createElement("div");
+      lab.className = "map-label small";
+      lab.dataset.id = s.id;
+      lab.textContent = displayStandName(s.name || "");
+      lab.style.left = `${(s.x || 0) * 100}%`;
+      lab.style.top = `${(s.y || 0) * 100}%`;
+      map.appendChild(lab);
+
       const dot = document.createElement("div");
       dot.className = `dot admin sym-${s.symbol || "dot"}`;
       dot.dataset.id = s.id;
@@ -711,6 +725,9 @@ function renderMapEditor(meta, setId) {
         drag.x = x; drag.y = y;
         dot.style.left = `${x * 100}%`;
         dot.style.top = `${y * 100}%`;
+        // flytta label samtidigt under drag
+        lab.style.left = `${x * 100}%`;
+        lab.style.top = `${y * 100}%`;
       });
 
       dot.addEventListener("pointerup", async (evt) => {
