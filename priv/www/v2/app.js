@@ -247,6 +247,7 @@ const v2state = {
   selectedSetId: null,
   moveStandId: null,
   newSymbol: "dot",
+  showLabels: true,
 };
 
 function getOrCreateStandCreateModal() {
@@ -667,14 +668,17 @@ function renderMapEditor(meta, setId) {
   function renderDots() {
     [...map.querySelectorAll(".dot, .map-label")].forEach((n) => n.remove());
     asArray(meta.stands).forEach((s) => {
-      // Label (namn) ovanför punkten
-      const lab = document.createElement("div");
-      lab.className = "map-label small";
-      lab.dataset.id = s.id;
-      lab.textContent = displayStandName(s.name || "");
-      lab.style.left = `${(s.x || 0) * 100}%`;
-      lab.style.top = `${(s.y || 0) * 100}%`;
-      map.appendChild(lab);
+      // Label (namn) ovanför punkten (valbart)
+      let lab = null;
+      if (v2state.showLabels) {
+        lab = document.createElement("div");
+        lab.className = "map-label small";
+        lab.dataset.id = s.id;
+        lab.textContent = displayStandName(s.name || "");
+        lab.style.left = `${(s.x || 0) * 100}%`;
+        lab.style.top = `${(s.y || 0) * 100}%`;
+        map.appendChild(lab);
+      }
 
       const dot = document.createElement("div");
       dot.className = `dot admin sym-${s.symbol || "dot"}`;
@@ -726,8 +730,10 @@ function renderMapEditor(meta, setId) {
         dot.style.left = `${x * 100}%`;
         dot.style.top = `${y * 100}%`;
         // flytta label samtidigt under drag
-        lab.style.left = `${x * 100}%`;
-        lab.style.top = `${y * 100}%`;
+        if (lab) {
+          lab.style.left = `${x * 100}%`;
+          lab.style.top = `${y * 100}%`;
+        }
       });
 
       dot.addEventListener("pointerup", async (evt) => {
@@ -1023,6 +1029,16 @@ async function renderAdmin() {
       up.className = "row";
       up.style.gap = "8px";
       up.style.alignItems = "center";
+
+      const cbLabels = document.createElement("input");
+      cbLabels.type = "checkbox";
+      cbLabels.checked = !!v2state.showLabels;
+      cbLabels.addEventListener("change", async () => {
+        v2state.showLabels = !!cbLabels.checked;
+        await renderAdmin();
+      });
+      up.appendChild(label("Visa namn på kartan", cbLabels));
+
       const file = document.createElement("input");
       file.type = "file";
       file.accept = "image/png,image/jpeg,image/webp";
