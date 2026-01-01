@@ -737,11 +737,18 @@ handle_v2_post_set_stands(Admin, SetId, A) ->
                 X0 = maps:get(<<"x">>, Body, undefined),
                 Y0 = maps:get(<<"y">>, Body, undefined),
                 Sym0 = maps:get(<<"symbol">>, Body, undefined),
-                case {validate_nonempty_string(Name0), validate_norm_coord(X0), validate_norm_coord(Y0), validate_symbol(Sym0)} of
-                    {{ok, Name}, {ok, X}, {ok, Y}, {ok, Sym}} ->
+                Id0 = maps:get(<<"id">>, Body, undefined),
+                case {validate_nonempty_string(Name0), validate_norm_coord(X0), validate_norm_coord(Y0), validate_symbol(Sym0), validate_optional_uuid(Id0)} of
+                    {{ok, Name}, {ok, X}, {ok, Y}, {ok, Sym}, {ok, StandIdBin}} ->
                         Now = now_rfc3339(),
+                        Stands0 = meta_get_stands(Meta0),
+                        %% För undo: tillåt client-supplied stand-id (om giltig UUID och ej upptagen)
+                        case lists:any(fun(S) -> to_bin(maps:get(<<"id">>, S, <<>>)) =:= StandIdBin end, Stands0) of
+                            true ->
+                                json_error(409, <<"stand_id_taken">>, #{<<"standId">> => StandIdBin});
+                            false ->
                         Stand = #{
-                            <<"id">> => to_bin(uuid_v4()),
+                            <<"id">> => StandIdBin,
                             <<"name">> => Name,
                             <<"x">> => X,
                             <<"y">> => Y,
@@ -749,11 +756,11 @@ handle_v2_post_set_stands(Admin, SetId, A) ->
                             <<"createdAt">> => Now,
                             <<"updatedAt">> => Now
                         },
-                        Stands0 = meta_get_stands(Meta0),
                         Meta = Meta0#{<<"stands">> => [Stand | Stands0]},
                         case v2_save_set_meta(AdminId, SetId, Meta) of
                             ok -> json_ok(201, Stand);
                             {error, Reason} -> json_error(500, <<"failed_to_update_meta">>, #{<<"reason">> => to_bin(Reason)})
+                        end
                         end;
                     _ ->
                         json_error(400, <<"invalid_stand">>, #{})
@@ -2665,6 +2672,22 @@ is_valid_uuid(S) when is_list(S) ->
         match -> true;
         nomatch -> false
     end.
+
+validate_optional_uuid(undefined) ->
+    {ok, to_bin(uuid_v4())};
+validate_optional_uuid(null) ->
+    {ok, to_bin(uuid_v4())};
+validate_optional_uuid(<<>>) ->
+    {ok, to_bin(uuid_v4())};
+validate_optional_uuid(B) when is_binary(B) ->
+    case is_valid_uuid(binary_to_list(B)) of
+        true -> {ok, B};
+        false -> {error, <<"invalid_uuid">>}
+    end;
+validate_optional_uuid(L) when is_list(L) ->
+    validate_optional_uuid(list_to_binary(L));
+validate_optional_uuid(_) ->
+    {error, <<"invalid_uuid">>}.
 
 %%====================================================================
 %% Response helpers

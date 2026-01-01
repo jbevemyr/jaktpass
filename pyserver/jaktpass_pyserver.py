@@ -936,6 +936,9 @@ class Handler(BaseHTTPRequestHandler):
                         body = self._read_json_body()
                         if body is None:
                             return self._err(400, "invalid_json", {})
+                        stand_id = (body.get("id") or "").strip()
+                        if stand_id and not validate_set_id(stand_id):
+                            return self._err(400, "invalid_stand_id", {"standId": stand_id})
                         name = validate_nonempty_string(body.get("name"))
                         x = clamp01(body.get("x"))
                         y = clamp01(body.get("y"))
@@ -948,10 +951,13 @@ class Handler(BaseHTTPRequestHandler):
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         now = now_rfc3339()
-                        stand = {"id": uuid_v4(), "name": name, "x": x, "y": y, "symbol": sym, "createdAt": now, "updatedAt": now}
+                        stands0 = meta.get("stands") or []
+                        if stand_id and any((s or {}).get("id") == stand_id for s in stands0):
+                            return self._err(409, "stand_id_taken", {"standId": stand_id})
+                        stand = {"id": (stand_id or uuid_v4()), "name": name, "x": x, "y": y, "symbol": sym, "createdAt": now, "updatedAt": now}
                         if note is not None:
                             stand["note"] = str(note)
-                        meta["stands"] = [stand] + (meta.get("stands") or [])
+                        meta["stands"] = [stand] + stands0
                         v2_save_set_meta(admin_id, set_id, meta)
                         return self._ok(stand, code=201)
 

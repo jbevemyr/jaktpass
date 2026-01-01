@@ -248,6 +248,8 @@ const v2state = {
   moveStandId: null,
   newSymbol: "dot",
   showLabels: true,
+  undoStack: [],
+  isUndoing: false,
 };
 
 function getOrCreateStandCreateModal() {
@@ -679,6 +681,46 @@ function openPrintMapWithLabels(meta, titleText) {
   w.document.close();
 }
 
+function pushUndo(action) {
+  if (v2state.isUndoing) return;
+  v2state.undoStack = [action, ...(v2state.undoStack || [])].slice(0, 20);
+}
+
+async function undoLast() {
+  const st = v2state.undoStack || [];
+  if (!st.length) return;
+  const a = st[0];
+  v2state.undoStack = st.slice(1);
+  v2state.isUndoing = true;
+  try {
+    if (a?.setId) v2state.selectedSetId = a.setId;
+    if (a.kind === "create_stand") {
+      await api(`/api/v2/sets/${encodeURIComponent(a.setId)}/stands/${encodeURIComponent(a.standId)}`, { method: "DELETE" });
+      toast("Ångrade: skapa punkt.");
+    } else if (a.kind === "delete_stand") {
+      const s = a.stand || {};
+      await api(`/api/v2/sets/${encodeURIComponent(a.setId)}/stands`, {
+        method: "POST",
+        jsonBody: { id: s.id, name: s.name, x: s.x, y: s.y, symbol: s.symbol || "dot" },
+      });
+      toast("Ångrade: radera punkt.");
+    } else if (a.kind === "patch_stand") {
+      await api(`/api/v2/sets/${encodeURIComponent(a.setId)}/stands/${encodeURIComponent(a.standId)}`, {
+        method: "PATCH",
+        jsonBody: a.before || {},
+      });
+      toast("Ångrade: ändring.");
+    } else {
+      toast("Inget att ångra.");
+    }
+  } catch {
+    toast("Kunde inte ångra.");
+  } finally {
+    v2state.isUndoing = false;
+    await renderAdmin();
+  }
+}
+
 async function fetchSet(setId) {
   const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
   const data = r?.data || null;
@@ -719,6 +761,7 @@ function standRow(setId, stand) {
     const nm = prompt("Nytt namn", stand.name || "");
     if (!nm || !nm.trim()) return;
     try {
+      pushUndo({ kind: "patch_stand", setId, standId: stand.id, before: { name: stand.name || "" } });
       await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(stand.id)}`, { method: "PATCH", jsonBody: { name: nm.trim() } });
       toast("Uppdaterat.");
       await renderAdmin();
@@ -733,6 +776,7 @@ function standRow(setId, stand) {
   btnDel.addEventListener("click", async () => {
     if (!confirm("Radera punkt?")) return;
     try {
+      pushUndo({ kind: "delete_stand", setId, stand: { id: stand.id, name: stand.name, x: stand.x, y: stand.y, symbol: stand.symbol || "dot" } });
       await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(stand.id)}`, { method: "DELETE" });
       toast("Raderat.");
       await renderAdmin();
@@ -801,6 +845,7 @@ function renderMapEditor(meta, setId) {
         if (!r) return;
         if (r.action === "delete") {
           try {
+            pushUndo({ kind: "delete_stand", setId, stand: { id: s.id, name: s.name, x: s.x, y: s.y, symbol: s.symbol || "dot" } });
             await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(s.id)}`, { method: "DELETE" });
             toast("Raderat.");
             await renderAdmin();
@@ -811,6 +856,10 @@ function renderMapEditor(meta, setId) {
         }
         if (r.action === "save") {
           try {
+            const before = {};
+            if ((s.name || "") !== r.name) before.name = s.name || "";
+            if ((s.symbol || "dot") !== (r.symbol || "dot")) before.symbol = s.symbol || "dot";
+            if (Object.keys(before).length) pushUndo({ kind: "patch_stand", setId, standId: s.id, before });
             await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(s.id)}`, { method: "PATCH", jsonBody: { name: r.name, symbol: r.symbol } });
             toast("Uppdaterat.");
             await renderAdmin();
@@ -862,6 +911,7 @@ function renderMapEditor(meta, setId) {
           return;
         }
         try {
+          pushUndo({ kind: "patch_stand", setId, standId, before: { x: s.x, y: s.y } });
           await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(standId)}`, { method: "PATCH", jsonBody: { x: newX, y: newY } });
           toast("Flyttat.");
           await renderAdmin();
@@ -890,7 +940,9 @@ function renderMapEditor(meta, setId) {
 
     if (v2state.moveStandId) {
       const standId = v2state.moveStandId;
+      const prev = (asArray(meta.stands).find((ss) => ss && ss.id === standId) || {});
       try {
+        pushUndo({ kind: "patch_stand", setId, standId, before: { x: prev.x ?? 0, y: prev.y ?? 0 } });
         await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands/${encodeURIComponent(standId)}`, { method: "PATCH", jsonBody: { x, y } });
         v2state.moveStandId = null;
         toast("Flyttat.");
@@ -905,7 +957,9 @@ function renderMapEditor(meta, setId) {
     if (!r) return;
     try {
       v2state.newSymbol = r.symbol || "dot";
-      await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: r.name, x, y, symbol: r.symbol || "dot" } });
+      const rr = await api(`/api/v2/sets/${encodeURIComponent(setId)}/stands`, { method: "POST", jsonBody: { name: r.name, x, y, symbol: r.symbol || "dot" } });
+      const created = rr?.data;
+      if (created?.id) pushUndo({ kind: "create_stand", setId, standId: created.id });
       toast("Skapat.");
       await renderAdmin();
     } catch {
@@ -1138,6 +1192,15 @@ async function renderAdmin() {
       up.className = "row";
       up.style.gap = "8px";
       up.style.alignItems = "center";
+
+      const btnUndo = document.createElement("button");
+      btnUndo.className = "secondary";
+      btnUndo.textContent = "Ångra";
+      btnUndo.disabled = !(v2state.undoStack && v2state.undoStack.length);
+      btnUndo.addEventListener("click", async () => {
+        await undoLast();
+      });
+      up.appendChild(btnUndo);
 
       const cbLabels = document.createElement("input");
       cbLabels.type = "checkbox";
