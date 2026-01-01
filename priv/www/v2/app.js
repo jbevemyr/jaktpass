@@ -1157,7 +1157,6 @@ async function renderAdmin() {
     }
   });
 
-  wrap.appendChild(row([label("Nytt set", name), btnCreate]));
   const cr = document.createElement("div");
   cr.className = "copyrow";
   cr.appendChild(shareUrl);
