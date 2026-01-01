@@ -304,6 +304,30 @@ def v2_index_path() -> Path:
     return v2_dir() / "admin_index.json"
 
 
+def v2_user_index_path() -> Path:
+    return v2_dir() / "user_index.json"
+
+
+def v2_set_index_path() -> Path:
+    return v2_dir() / "set_index.json"
+
+
+def v2_users_dir() -> Path:
+    return v2_dir() / "users"
+
+
+def v2_user_dir(user_id: str) -> Path:
+    return v2_users_dir() / user_id
+
+
+def v2_user_path(user_id: str) -> Path:
+    return v2_user_dir(user_id) / "user.json"
+
+
+def v2_user_sets_path(user_id: str) -> Path:
+    return v2_user_dir(user_id) / "sets.json"
+
+
 def v2_cookie_name() -> str:
     return "jaktpass_v2"
 
@@ -357,6 +381,56 @@ def v2_index_save(d: Dict[str, str]) -> None:
     atomic_write_json(v2_index_path(), d)
 
 
+def v2_user_index_load() -> Dict[str, str]:
+    try:
+        d = read_json(v2_user_index_path())
+        return d if isinstance(d, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def v2_user_index_save(d: Dict[str, str]) -> None:
+    atomic_write_json(v2_user_index_path(), d)
+
+
+def v2_set_index_load() -> Dict[str, str]:
+    try:
+        d = read_json(v2_set_index_path())
+        return d if isinstance(d, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def v2_set_index_save(d: Dict[str, str]) -> None:
+    atomic_write_json(v2_set_index_path(), d)
+
+
+def v2_load_user(user_id: str) -> Dict[str, Any]:
+    return read_json(v2_user_path(user_id))
+
+
+def v2_save_user(user_id: str, user: Dict[str, Any]) -> None:
+    atomic_write_json(v2_user_path(user_id), user)
+
+
+def v2_load_user_sets(user_id: str) -> List[str]:
+    try:
+        d = read_json(v2_user_sets_path(user_id))
+        return d if isinstance(d, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def v2_save_user_sets(user_id: str, set_ids: List[str]) -> None:
+    atomic_write_json(v2_user_sets_path(user_id), set_ids)
+
+
 def v2_load_admin(admin_id: str) -> Dict[str, Any]:
     return read_json(v2_admin_path(admin_id))
 
@@ -365,10 +439,23 @@ def v2_save_admin(admin_id: str, admin: Dict[str, Any]) -> None:
     atomic_write_json(v2_admin_path(admin_id), admin)
 
 
-def v2_new_session(admin_id: str) -> str:
+def v2_new_session(principal_type: str, principal_id: str) -> str:
     tok = base64url(os.urandom(24))
-    atomic_write_json(v2_session_path(tok), {"adminId": admin_id, "createdAt": now_rfc3339()})
+    d: Dict[str, Any] = {"t": principal_type, "createdAt": now_rfc3339()}
+    if principal_type == "user":
+        d["userId"] = principal_id
+    else:
+        d["adminId"] = principal_id
+    atomic_write_json(v2_session_path(tok), d)
     return tok
+
+
+def v2_new_admin_session(admin_id: str) -> str:
+    return v2_new_session("admin", admin_id)
+
+
+def v2_new_user_session(user_id: str) -> str:
+    return v2_new_session("user", user_id)
 
 
 def v2_load_session(token: str) -> Optional[Dict[str, Any]]:
@@ -628,20 +715,34 @@ class Handler(BaseHTTPRequestHandler):
     def _v2_expire_cookie(self) -> List[Tuple[str, str]]:
         return [("Set-Cookie", f"{v2_cookie_name()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")]
 
-    def _v2_current_admin(self) -> Optional[Dict[str, Any]]:
+    def _v2_current_principal(self) -> Optional[Tuple[str, Dict[str, Any]]]:
         tok = self._get_cookie(v2_cookie_name())
         if not tok:
             return None
-        sess = v2_load_session(tok)
-        if not sess:
+        sess = v2_load_session(tok) or {}
+        if not isinstance(sess, dict):
             return None
-        admin_id = sess.get("adminId")
-        if not admin_id:
-            return None
+        t = str(sess.get("t") or "")
         try:
-            return v2_load_admin(str(admin_id))
+            if t == "user":
+                uid = str(sess.get("userId") or "")
+                if not uid:
+                    return None
+                return ("user", v2_load_user(uid))
+            # default: admin (backward compat: session utan "t")
+            aid = str(sess.get("adminId") or "")
+            if not aid:
+                return None
+            return ("admin", v2_load_admin(aid))
         except Exception:
             return None
+
+    def _v2_current_admin(self) -> Optional[Dict[str, Any]]:
+        p = self._v2_current_principal()
+        if not p:
+            return None
+        t, obj = p
+        return obj if t == "admin" else None
 
     def _v2_require_admin(self) -> Optional[Dict[str, Any]]:
         adm = self._v2_current_admin()
@@ -649,6 +750,52 @@ class Handler(BaseHTTPRequestHandler):
             self._err(401, "unauthorized", {"details": "Not logged in"})
             return None
         return adm
+
+    def _v2_require_principal(self) -> Optional[Tuple[str, Dict[str, Any]]]:
+        p = self._v2_current_principal()
+        if not p:
+            self._err(401, "unauthorized", {"details": "Not logged in"})
+            return None
+        return p
+
+    def _v2_require_set_editor(self, set_id: str) -> Optional[Tuple[str, str]]:
+        """Return (owner_admin_id, set_id) if current principal may edit this set."""
+        p = self._v2_require_principal()
+        if not p:
+            return None
+        t, obj = p
+        if t == "admin":
+            admin_id = str(obj.get("id") or "")
+            try:
+                _ = v2_load_set_meta(admin_id, set_id)
+            except FileNotFoundError:
+                self._err(404, "set_not_found", {"setId": set_id})
+                return None
+            except Exception:
+                self._err(500, "failed_to_load_set", {})
+                return None
+            return (admin_id, set_id)
+
+        # user/editor
+        user_id = str(obj.get("id") or "")
+        idx = v2_set_index_load()
+        owner_admin_id = str(idx.get(set_id) or "")
+        if not owner_admin_id:
+            self._err(404, "set_not_found", {"setId": set_id})
+            return None
+        try:
+            meta = v2_load_set_meta(owner_admin_id, set_id)
+        except FileNotFoundError:
+            self._err(404, "set_not_found", {"setId": set_id})
+            return None
+        except Exception:
+            self._err(500, "failed_to_load_set", {})
+            return None
+        editors = meta.get("editors") or []
+        if user_id not in [str(x) for x in editors]:
+            self._err(401, "unauthorized", {})
+            return None
+        return (owner_admin_id, set_id)
 
     def _read_json_body(self) -> Optional[Dict[str, Any]]:
         try:
@@ -772,7 +919,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._err(400, "invalid_password", {"details": "minst 8 tecken"})
                     with V2_LOCK:
                         idx = v2_index_load()
-                        if email in idx:
+                        uidx = v2_user_index_load()
+                        if email in idx or email in uidx:
                             return self._err(409, "email_taken", {})
                         admin_id = uuid_v4()
                         salt = os.urandom(16)
@@ -791,7 +939,7 @@ class Handler(BaseHTTPRequestHandler):
                         v2_save_admin(admin_id, admin)
                         idx[email] = admin_id
                         v2_index_save(idx)
-                        tok = v2_new_session(admin_id)
+                        tok = v2_new_admin_session(admin_id)
                     return self._send_json(201, {"ok": True, "data": {"admin": {"id": admin_id, "email": email}}}, headers=self._v2_set_cookie(tok))
 
                 if method == "POST" and v2 == ["login"]:
@@ -806,7 +954,23 @@ class Handler(BaseHTTPRequestHandler):
                         idx = v2_index_load()
                         admin_id = idx.get(email)
                     if not admin_id:
-                        return self._err(401, "unauthorized", {})
+                        # fallback: user/editor login
+                        with V2_LOCK:
+                            uidx = v2_user_index_load()
+                            user_id = uidx.get(email)
+                        if not user_id:
+                            return self._err(401, "unauthorized", {})
+                        try:
+                            user = v2_load_user(str(user_id))
+                            salt = base64.b64decode((user.get("pw") or {}).get("salt") or "")
+                            want = base64.b64decode((user.get("pw") or {}).get("hash") or "")
+                            got = pbkdf2_sha256(pw, salt)
+                            if got != want:
+                                return self._err(401, "unauthorized", {})
+                            tok = v2_new_user_session(str(user_id))
+                            return self._send_json(200, {"ok": True, "data": {"user": {"id": str(user_id), "email": email}}}, headers=self._v2_set_cookie(tok))
+                        except Exception:
+                            return self._err(401, "unauthorized", {})
                     try:
                         admin = v2_load_admin(admin_id)
                         salt = base64.b64decode((admin.get("pw") or {}).get("salt") or "")
@@ -814,7 +978,7 @@ class Handler(BaseHTTPRequestHandler):
                         got = pbkdf2_sha256(pw, salt)
                         if got != want:
                             return self._err(401, "unauthorized", {})
-                        tok = v2_new_session(admin_id)
+                        tok = v2_new_admin_session(admin_id)
                         return self._send_json(200, {"ok": True, "data": {"admin": {"id": admin_id, "email": email}}}, headers=self._v2_set_cookie(tok))
                     except Exception:
                         return self._err(401, "unauthorized", {})
@@ -826,32 +990,120 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(200, {"ok": True, "data": {"loggedOut": True}}, headers=self._v2_expire_cookie())
 
                 if method == "GET" and v2 == ["me"]:
-                    adm = self._v2_current_admin()
-                    if not adm:
+                    p = self._v2_current_principal()
+                    if not p:
                         return self._err(401, "unauthorized", {})
-                    return self._ok({"admin": {"id": adm.get("id"), "email": adm.get("email"), "createdAt": adm.get("createdAt")}})
+                    t, obj = p
+                    if t == "user":
+                        return self._ok({"user": {"id": obj.get("id"), "email": obj.get("email"), "createdAt": obj.get("createdAt"), "createdBy": obj.get("createdBy")}})
+                    return self._ok({"admin": {"id": obj.get("id"), "email": obj.get("email"), "createdAt": obj.get("createdAt")}})
 
                 # Admin-only v2 endpoints
-                if v2 and v2[0] == "sets":
+                if v2 and v2[0] == "admin" and len(v2) == 2 and v2[1] == "users":
                     adm = self._v2_require_admin()
                     if not adm:
                         return
                     admin_id = str(adm.get("id") or "")
+                    # per-admin users index stored under admin dir
+                    users_index_path = v2_admin_dir(admin_id) / "users.json"
+                    if method == "GET":
+                        try:
+                            m = read_json(users_index_path)
+                            m = m if isinstance(m, dict) else {}
+                        except FileNotFoundError:
+                            m = {}
+                        except Exception:
+                            m = {}
+                        out = []
+                        for email, uid in sorted(m.items(), key=lambda kv: str(kv[0])):
+                            try:
+                                u = v2_load_user(str(uid))
+                            except Exception:
+                                continue
+                            out.append({"id": u.get("id"), "email": str(u.get("email") or email), "createdAt": u.get("createdAt"), "createdBy": u.get("createdBy")})
+                        return self._ok(out)
+
+                    if method == "POST":
+                        body = self._read_json_body()
+                        if body is None:
+                            return self._err(400, "invalid_json", {})
+                        email = validate_email(body.get("email"))
+                        pw = validate_password(body.get("password"))
+                        if not email:
+                            return self._err(400, "invalid_email", {})
+                        if not pw:
+                            return self._err(400, "invalid_password", {})
+                        with V2_LOCK:
+                            aidx = v2_index_load()
+                            uidx = v2_user_index_load()
+                            if email in aidx or email in uidx:
+                                return self._err(409, "email_taken", {})
+                            user_id = uuid_v4()
+                            salt = os.urandom(16)
+                            h = pbkdf2_sha256(pw, salt)
+                            user = {
+                                "id": user_id,
+                                "email": email,
+                                "pw": {
+                                    "alg": "pbkdf2_sha256",
+                                    "iter": 100000,
+                                    "salt": base64.b64encode(salt).decode("ascii"),
+                                    "hash": base64.b64encode(h).decode("ascii"),
+                                },
+                                "createdAt": now_rfc3339(),
+                                "createdBy": admin_id,
+                            }
+                            v2_save_user(user_id, user)
+                            uidx[email] = user_id
+                            v2_user_index_save(uidx)
+                            try:
+                                m = read_json(users_index_path)
+                                m = m if isinstance(m, dict) else {}
+                            except Exception:
+                                m = {}
+                            m[email] = user_id
+                            atomic_write_json(users_index_path, m)
+                        return self._ok({"user": {"id": user_id, "email": email}}, code=201)
+
+                if v2 and v2[0] == "sets":
+                    p = self._v2_require_principal()
+                    if not p:
+                        return
+                    principal_type, principal = p
+                    admin_id = str(principal.get("id") or "") if principal_type == "admin" else ""
 
                     if method == "GET" and v2 == ["sets"]:
-                        root = v2_admin_sets_dir(admin_id)
-                        root.mkdir(parents=True, exist_ok=True)
+                        if principal_type == "admin":
+                            root = v2_admin_sets_dir(admin_id)
+                            root.mkdir(parents=True, exist_ok=True)
+                            out = []
+                            for sid in sorted([p.name for p in root.iterdir() if p.is_dir()]):
+                                try:
+                                    meta = v2_load_set_meta(admin_id, sid)
+                                except Exception:
+                                    continue
+                                img = (meta.get("image") or {}).get("filename")
+                                out.append({"id": sid, "name": (meta.get("set") or {}).get("name"), "hasImage": bool(img), "shareId": meta.get("shareId")})
+                            return self._ok(out)
+                        # user/editor: list accessible sets from user sets-file
+                        user_id = str(principal.get("id") or "")
+                        idx = v2_set_index_load()
                         out = []
-                        for sid in sorted([p.name for p in root.iterdir() if p.is_dir()]):
+                        for sid in v2_load_user_sets(user_id):
+                            owner = str(idx.get(str(sid)) or "")
+                            if not owner:
+                                continue
                             try:
-                                meta = v2_load_set_meta(admin_id, sid)
+                                meta = v2_load_set_meta(owner, str(sid))
                             except Exception:
                                 continue
                             img = (meta.get("image") or {}).get("filename")
-                            out.append({"id": sid, "name": (meta.get("set") or {}).get("name"), "hasImage": bool(img), "shareId": meta.get("shareId")})
+                            out.append({"id": str(sid), "name": (meta.get("set") or {}).get("name"), "hasImage": bool(img), "shareId": meta.get("shareId")})
                         return self._ok(out)
 
                     if method == "POST" and v2 == ["sets"]:
+                        if principal_type != "admin":
+                            return self._err(401, "unauthorized", {})
                         body = self._read_json_body()
                         if body is None:
                             return self._err(400, "invalid_json", {})
@@ -862,14 +1114,22 @@ class Handler(BaseHTTPRequestHandler):
                         share_id = v2_new_share(admin_id, set_id)
                         meta = {"set": {"id": set_id, "name": nm, "createdAt": now_rfc3339()}, "image": None, "stands": [], "shareId": share_id}
                         v2_save_set_meta(admin_id, set_id, meta)
+                        with V2_LOCK:
+                            si = v2_set_index_load()
+                            si[set_id] = admin_id
+                            v2_set_index_save(si)
                         return self._ok({"id": set_id, "shareId": share_id, "shareUrl": f"/v2/#/quiz/{share_id}"}, code=201)
 
                     if method == "GET" and len(v2) == 2 and v2[0] == "sets":
                         set_id = unquote(v2[1])
                         if not validate_set_id(set_id):
                             return self._err(400, "invalid_set_id", {"setId": set_id})
+                        res = self._v2_require_set_editor(set_id)
+                        if not res:
+                            return
+                        owner_admin_id, _ = res
                         try:
-                            meta = v2_load_set_meta(admin_id, set_id)
+                            meta = v2_load_set_meta(owner_admin_id, set_id)
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         except Exception as e:
@@ -879,7 +1139,89 @@ class Handler(BaseHTTPRequestHandler):
                         meta["imageUrl"] = (f"/api/v2/media/shares/{share_id}/image" if (share_id and img) else None)
                         return self._ok(meta)
 
+                    if method == "GET" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "editors":
+                        if principal_type != "admin":
+                            return self._err(401, "unauthorized", {})
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        editors = meta.get("editors") or []
+                        out = []
+                        for uid in editors:
+                            try:
+                                u = v2_load_user(str(uid))
+                                out.append({"id": u.get("id"), "email": u.get("email")})
+                            except Exception:
+                                continue
+                        return self._ok({"setId": set_id, "editors": out})
+
+                    if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "editors":
+                        if principal_type != "admin":
+                            return self._err(401, "unauthorized", {})
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        body = self._read_json_body()
+                        if body is None:
+                            return self._err(400, "invalid_json", {})
+                        email = validate_email(body.get("email"))
+                        if not email:
+                            return self._err(400, "invalid_email", {})
+                        # must be user created by this admin
+                        users_index_path = v2_admin_dir(admin_id) / "users.json"
+                        try:
+                            m = read_json(users_index_path)
+                            m = m if isinstance(m, dict) else {}
+                        except Exception:
+                            m = {}
+                        user_id = str(m.get(email) or "")
+                        if not user_id:
+                            return self._err(404, "user_not_found", {})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        editors = [str(x) for x in (meta.get("editors") or [])]
+                        if user_id not in editors:
+                            editors = [user_id] + editors
+                        meta["editors"] = editors
+                        v2_save_set_meta(admin_id, set_id, meta)
+                        with V2_LOCK:
+                            si = v2_set_index_load()
+                            si[set_id] = admin_id
+                            v2_set_index_save(si)
+                        sets0 = v2_load_user_sets(user_id)
+                        if set_id not in [str(x) for x in sets0]:
+                            v2_save_user_sets(user_id, [set_id] + sets0)
+                        return self._ok({"setId": set_id, "added": True})
+
+                    if method == "DELETE" and len(v2) == 4 and v2[0] == "sets" and v2[2] == "editors":
+                        if principal_type != "admin":
+                            return self._err(401, "unauthorized", {})
+                        set_id = unquote(v2[1])
+                        user_id = unquote(v2[3])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        if not validate_set_id(user_id):
+                            return self._err(400, "invalid_user_id", {"userId": user_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        editors = [str(x) for x in (meta.get("editors") or []) if str(x) != user_id]
+                        meta["editors"] = editors
+                        v2_save_set_meta(admin_id, set_id, meta)
+                        sets0 = [str(x) for x in v2_load_user_sets(user_id) if str(x) != set_id]
+                        v2_save_user_sets(user_id, sets0)
+                        return self._ok({"setId": set_id, "removed": True})
+
                     if method == "DELETE" and len(v2) == 2 and v2[0] == "sets":
+                        if principal_type != "admin":
+                            return self._err(401, "unauthorized", {})
                         set_id = unquote(v2[1])
                         if not validate_set_id(set_id):
                             return self._err(400, "invalid_set_id", {"setId": set_id})
@@ -903,14 +1245,23 @@ class Handler(BaseHTTPRequestHandler):
                             shutil.rmtree(v2_set_dir(admin_id, set_id), ignore_errors=True)
                         except Exception as e:
                             return self._err(500, "failed_to_delete_set", {"error": str(e)})
+                        with V2_LOCK:
+                            si = v2_set_index_load()
+                            if set_id in si:
+                                del si[set_id]
+                                v2_set_index_save(si)
                         return self._ok({"deleted": True, "setId": set_id, "shareId": share_id})
 
                     if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "image":
                         set_id = unquote(v2[1])
                         if not validate_set_id(set_id):
                             return self._err(400, "invalid_set_id", {"setId": set_id})
+                        res = self._v2_require_set_editor(set_id)
+                        if not res:
+                            return
+                        owner_admin_id, _ = res
                         try:
-                            meta = v2_load_set_meta(admin_id, set_id)
+                            meta = v2_load_set_meta(owner_admin_id, set_id)
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         parts = self._read_multipart()
@@ -921,12 +1272,12 @@ class Handler(BaseHTTPRequestHandler):
                         if not ext:
                             return self._err(400, "invalid_image_extension", {"allowed": ["png", "jpg", "jpeg", "webp"]})
                         out_name = f"image.{ext}"
-                        out_path = v2_set_dir(admin_id, set_id) / out_name
+                        out_path = v2_set_dir(owner_admin_id, set_id) / out_name
                         out_path.parent.mkdir(parents=True, exist_ok=True)
                         out_path.write_bytes(data)
                         w, h = image_dims(ext, data)
                         meta["image"] = {"filename": out_name, "width": w, "height": h, "uploadedAt": now_rfc3339()}
-                        v2_save_set_meta(admin_id, set_id, meta)
+                        v2_save_set_meta(owner_admin_id, set_id, meta)
                         return self._ok(meta["image"])
 
                     if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "stands":
@@ -946,8 +1297,12 @@ class Handler(BaseHTTPRequestHandler):
                         sym = validate_symbol(body.get("symbol"))
                         if not name or x is None or y is None:
                             return self._err(400, "invalid_payload", {"expected": "name + x + y (0..1)"})
+                        res = self._v2_require_set_editor(set_id)
+                        if not res:
+                            return
+                        owner_admin_id, _ = res
                         try:
-                            meta = v2_load_set_meta(admin_id, set_id)
+                            meta = v2_load_set_meta(owner_admin_id, set_id)
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         now = now_rfc3339()
@@ -958,7 +1313,7 @@ class Handler(BaseHTTPRequestHandler):
                         if note is not None:
                             stand["note"] = str(note)
                         meta["stands"] = [stand] + stands0
-                        v2_save_set_meta(admin_id, set_id, meta)
+                        v2_save_set_meta(owner_admin_id, set_id, meta)
                         return self._ok(stand, code=201)
 
                     if method in ("PATCH", "DELETE") and len(v2) == 4 and v2[0] == "sets" and v2[2] == "stands":
@@ -966,8 +1321,12 @@ class Handler(BaseHTTPRequestHandler):
                         stand_id = unquote(v2[3])
                         if not validate_set_id(set_id):
                             return self._err(400, "invalid_set_id", {"setId": set_id})
+                        res = self._v2_require_set_editor(set_id)
+                        if not res:
+                            return
+                        owner_admin_id, _ = res
                         try:
-                            meta = v2_load_set_meta(admin_id, set_id)
+                            meta = v2_load_set_meta(owner_admin_id, set_id)
                         except FileNotFoundError:
                             return self._err(404, "set_not_found", {"setId": set_id})
                         stands = meta.get("stands") or []
@@ -976,7 +1335,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self._err(404, "not_found", {"id": stand_id})
                         if method == "DELETE":
                             meta["stands"] = rest
-                            v2_save_set_meta(admin_id, set_id, meta)
+                            v2_save_set_meta(owner_admin_id, set_id, meta)
                             return self._ok({"deleted": True})
                         body = self._read_json_body()
                         if body is None:
@@ -1002,7 +1361,7 @@ class Handler(BaseHTTPRequestHandler):
                             found["symbol"] = validate_symbol(body.get("symbol"))
                         found["updatedAt"] = now_rfc3339()
                         meta["stands"] = [found] + rest
-                        v2_save_set_meta(admin_id, set_id, meta)
+                        v2_save_set_meta(owner_admin_id, set_id, meta)
                         return self._ok(found)
 
                     if method == "POST" and len(v2) == 3 and v2[2] == "share":

@@ -231,7 +231,10 @@ function pSmall(text) {
 async function ensureMe() {
   try {
     const r = await api("/api/v2/me");
-    return r?.data?.admin || null;
+    const d = r?.data || {};
+    if (d.admin) return { type: "admin", ...d.admin };
+    if (d.user) return { type: "user", ...d.user };
+    return null;
   } catch {
     return null;
   }
@@ -1035,6 +1038,7 @@ async function renderRegister() {
 function setRow(setObj) {
   const d = document.createElement("div");
   d.className = `set-row ${v2state.selectedSetId === setObj.id ? "selected" : ""}`.trim();
+  const isAdmin = !!setObj._isAdmin;
 
   // Klick på raden väljer set för "Bild & punkter"
   d.addEventListener("click", async () => {
@@ -1096,9 +1100,9 @@ function setRow(setObj) {
   const right = document.createElement("div");
   right.className = "row";
   right.style.gap = "8px";
-  right.appendChild(btnShare);
+  if (isAdmin) right.appendChild(btnShare);
   right.appendChild(btnQuiz);
-  right.appendChild(btnDelSet);
+  if (isAdmin) right.appendChild(btnDelSet);
 
   d.appendChild(left);
   d.appendChild(right);
@@ -1109,29 +1113,33 @@ async function renderAdmin() {
   const me = await ensureMe();
   setAuthedUI(!!me);
   if (!me) return navTo("#/login");
+  const isAdmin = me.type === "admin";
 
   const wrap = document.createElement("div");
   wrap.appendChild(h2("Mina set"));
-  wrap.appendChild(pSmall(`Inloggad som ${me.email}.`));
+  wrap.appendChild(pSmall(`Inloggad som ${me.email}. ${isAdmin ? "Administratör" : "Redaktör"}.`));
 
-  const name = document.createElement("input");
-  name.placeholder = "Set-namn";
-  const btnCreate = document.createElement("button");
-  btnCreate.textContent = "Skapa set";
-  btnCreate.addEventListener("click", async () => {
-    if (!name.value.trim()) return toast("Ange namn.");
-    try {
-      const r = await api("/api/v2/sets", { method: "POST", jsonBody: { name: name.value } });
-      const newId = r?.data?.id;
-      name.value = "";
-      toast("Skapat.");
-      if (newId) v2state.selectedSetId = newId;
-      // Vi är redan på #/admin och hashchange triggar inte alltid vid samma hash → re-render direkt.
-      await renderAdmin();
-    } catch {
-      toast("Kunde inte skapa set.");
-    }
-  });
+  if (isAdmin) {
+    const name = document.createElement("input");
+    name.placeholder = "Set-namn";
+    const btnCreate = document.createElement("button");
+    btnCreate.textContent = "Skapa set";
+    btnCreate.addEventListener("click", async () => {
+      if (!name.value.trim()) return toast("Ange namn.");
+      try {
+        const r = await api("/api/v2/sets", { method: "POST", jsonBody: { name: name.value } });
+        const newId = r?.data?.id;
+        name.value = "";
+        toast("Skapat.");
+        if (newId) v2state.selectedSetId = newId;
+        // Vi är redan på #/admin och hashchange triggar inte alltid vid samma hash → re-render direkt.
+        await renderAdmin();
+      } catch {
+        toast("Kunde inte skapa set.");
+      }
+    });
+    wrap.appendChild(row([label("Nytt set", name), btnCreate]));
+  }
 
   const shareUrl = document.createElement("input");
   shareUrl.id = "v2-share-url";
@@ -1164,7 +1172,7 @@ async function renderAdmin() {
     sets = [];
   }
   if (!sets.length) wrap.appendChild(pSmall("Inga set ännu."));
-  else sets.forEach((s) => wrap.appendChild(setRow(s)));
+  else sets.forEach((s) => wrap.appendChild(setRow({ ...s, _isAdmin: isAdmin })));
 
   // ---- Redigera set: bild + pass ----
   if (sets.length) {
@@ -1266,6 +1274,101 @@ async function renderAdmin() {
     }
 
     wrap.appendChild(sec);
+  }
+
+  // ---- Admin-only: skapa users + koppla till set ----
+  if (isAdmin) {
+    const secU = document.createElement("div");
+    secU.style.marginTop = "14px";
+    secU.appendChild(h2("Användare (redaktörer)"));
+    secU.appendChild(pSmall("Du kan skapa redaktörskonton och ge dem access till ett set. Redaktörer kan redigera bild/punkter men inte skapa användare eller set."));
+
+    const uEmail = document.createElement("input");
+    uEmail.placeholder = "E-post";
+    const uPass = document.createElement("input");
+    uPass.type = "password";
+    uPass.placeholder = "Lösenord (minst 8 tecken)";
+    const btnMk = document.createElement("button");
+    btnMk.textContent = "Skapa användare";
+    btnMk.addEventListener("click", async () => {
+      if (!uEmail.value.trim() || !uPass.value) return toast("Ange e-post + lösenord.");
+      try {
+        await api("/api/v2/admin/users", { method: "POST", jsonBody: { email: uEmail.value, password: uPass.value } });
+        uEmail.value = "";
+        uPass.value = "";
+        toast("Skapad.");
+        await renderAdmin();
+      } catch {
+        toast("Kunde inte skapa användare.");
+      }
+    });
+    secU.appendChild(row([label("Ny användare", uEmail), label("Lösenord", uPass), btnMk]));
+
+    // Koppla editor till valt set
+    if (v2state.selectedSetId) {
+      const eEmail = document.createElement("input");
+      eEmail.placeholder = "E-post att ge access";
+      const btnAdd = document.createElement("button");
+      btnAdd.className = "secondary";
+      btnAdd.textContent = "Ge access till valt set";
+      btnAdd.addEventListener("click", async () => {
+        if (!eEmail.value.trim()) return toast("Ange e-post.");
+        try {
+          await api(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/editors`, { method: "POST", jsonBody: { email: eEmail.value } });
+          eEmail.value = "";
+          toast("Access given.");
+          await renderAdmin();
+        } catch {
+          toast("Kunde inte ge access.");
+        }
+      });
+      secU.appendChild(row([label("Ge access", eEmail), btnAdd]));
+
+      try {
+        const r = await api(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/editors`);
+        const editors = r?.data?.editors || [];
+        secU.appendChild(pSmall(`Redaktörer för valt set: ${editors.length}`));
+        editors.forEach((u) => {
+          const rr = document.createElement("div");
+          rr.className = "row";
+          rr.style.justifyContent = "space-between";
+          rr.style.alignItems = "center";
+          rr.style.gap = "8px";
+          rr.appendChild(Object.assign(document.createElement("div"), { className: "small", textContent: u.email || u.id || "" }));
+          const b = document.createElement("button");
+          b.className = "danger";
+          b.textContent = "Ta bort";
+          b.addEventListener("click", async () => {
+            if (!confirm("Ta bort access?")) return;
+            try {
+              await api(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/editors/${encodeURIComponent(u.id)}`, { method: "DELETE" });
+              toast("Borttagen.");
+              await renderAdmin();
+            } catch {
+              toast("Kunde inte ta bort.");
+            }
+          });
+          rr.appendChild(b);
+          secU.appendChild(rr);
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    // Lista användare
+    try {
+      const r = await api("/api/v2/admin/users");
+      const users = r?.data || [];
+      secU.appendChild(pSmall(`Mina användare: ${users.length}`));
+      users.forEach((u) => {
+        secU.appendChild(Object.assign(document.createElement("div"), { className: "small", textContent: `${u.email || ""} (${u.id || ""})` }));
+      });
+    } catch {
+      // ignore
+    }
+
+    wrap.appendChild(secU);
   }
 
   render(wrap);

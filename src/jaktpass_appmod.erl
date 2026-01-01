@@ -86,23 +86,35 @@ dispatch('GET', ["v2", "me"], A) ->
 
 %% V2 admin-protected (session cookie)
 dispatch('GET', ["v2", "sets"], A) ->
-    with_v2_admin(A, fun(Admin) -> handle_v2_get_sets(Admin) end);
+    with_v2_principal(A, fun(Principal) -> handle_v2_get_sets_principal(Principal) end);
 dispatch('POST', ["v2", "sets"], A) ->
     with_v2_admin(A, fun(Admin) -> handle_v2_post_sets(Admin, A) end);
 dispatch('GET', ["v2", "sets", SetId], A) ->
-    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_get_set(Admin, SId) end) end);
+    with_v2_set_editor(A, SetId, fun(OwnerAdminId, SId, _Principal) -> handle_v2_get_set_by_owner(OwnerAdminId, SId) end);
 dispatch('DELETE', ["v2", "sets", SetId], A) ->
     with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_delete_set(Admin, SId) end) end);
 dispatch('POST', ["v2", "sets", SetId, "image"], A) ->
-    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_set_image(Admin, SId, A) end) end);
+    with_v2_set_editor(A, SetId, fun(OwnerAdminId, SId, _Principal) -> handle_v2_post_set_image_by_owner(OwnerAdminId, SId, A) end);
 dispatch('POST', ["v2", "sets", SetId, "stands"], A) ->
-    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_set_stands(Admin, SId, A) end) end);
+    with_v2_set_editor(A, SetId, fun(OwnerAdminId, SId, _Principal) -> handle_v2_post_set_stands_by_owner(OwnerAdminId, SId, A) end);
 dispatch('PATCH', ["v2", "sets", SetId, "stands", StandId], A) ->
-    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_patch_stand(Admin, SId, StandId, A) end) end);
+    with_v2_set_editor(A, SetId, fun(OwnerAdminId, SId, _Principal) -> handle_v2_patch_stand_by_owner(OwnerAdminId, SId, StandId, A) end);
 dispatch('DELETE', ["v2", "sets", SetId, "stands", StandId], A) ->
-    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_delete_stand(Admin, SId, StandId) end) end);
+    with_v2_set_editor(A, SetId, fun(OwnerAdminId, SId, _Principal) -> handle_v2_delete_stand_by_owner(OwnerAdminId, SId, StandId) end);
 dispatch('POST', ["v2", "sets", SetId, "share"], A) ->
     with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_share(Admin, SId) end) end);
+
+%% V2 admin: user management + set editors
+dispatch('GET', ["v2", "admin", "users"], A) ->
+    with_v2_admin(A, fun(Admin) -> handle_v2_admin_get_users(Admin) end);
+dispatch('POST', ["v2", "admin", "users"], A) ->
+    with_v2_admin(A, fun(Admin) -> handle_v2_admin_post_user(Admin, A) end);
+dispatch('GET', ["v2", "sets", SetId, "editors"], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_get_set_editors(Admin, SId) end) end);
+dispatch('POST', ["v2", "sets", SetId, "editors"], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_add_set_editor(Admin, SId, A) end) end);
+dispatch('DELETE', ["v2", "sets", SetId, "editors", UserId], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_remove_set_editor(Admin, SId, UserId) end) end);
 
 %% V2 public (share token)
 dispatch('GET', ["v2", "quiz", ShareId, "leaderboard"], A) ->
@@ -445,10 +457,50 @@ with_admin(A, Fun) ->
 %%====================================================================
 
 with_v2_admin(A, Fun) ->
-    case v2_current_admin(A) of
-        {ok, Admin} -> Fun(Admin);
+    case v2_current_principal(A) of
+        {ok, {admin, Admin}} -> Fun(Admin);
         _ -> v2_unauthorized()
     end.
+
+with_v2_principal(A, Fun) ->
+    case v2_current_principal(A) of
+        {ok, Principal} -> Fun(Principal);
+        _ -> v2_unauthorized()
+    end.
+
+with_v2_set_editor(A, SetId0, Fun) ->
+    with_valid_set_id(SetId0, fun(SetId) ->
+        case v2_current_principal(A) of
+            {ok, {admin, Admin}} ->
+                AdminId = v2_admin_id(Admin),
+                %% Admin kan bara redigera sina egna set
+                case v2_load_set_meta(AdminId, SetId) of
+                    {ok, _Meta} -> Fun(AdminId, SetId, {admin, Admin});
+                    {error, enoent} -> json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+                    {error, Reason} -> json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+                end;
+            {ok, {user, User}} ->
+                UserId = v2_user_id(User),
+                case v2_set_index_lookup(SetId) of
+                    {ok, OwnerAdminId} ->
+                        case v2_load_set_meta(OwnerAdminId, SetId) of
+                            {ok, Meta0} ->
+                                Editors0 = maps:get(<<"editors">>, Meta0, []),
+                                Editors = [to_bin(E) || E <- (case is_list(Editors0) of true -> Editors0; false -> [] end)],
+                                case lists:member(to_bin(UserId), Editors) of
+                                    true -> Fun(OwnerAdminId, SetId, {user, User});
+                                    false -> v2_unauthorized()
+                                end;
+                            {error, enoent} -> json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+                            {error, Reason} -> json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+                        end;
+                    not_found ->
+                        json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)})
+                end;
+            _ ->
+                v2_unauthorized()
+        end
+    end).
 
 v2_unauthorized() ->
     [{status, 401},
@@ -460,9 +512,11 @@ v2_unauthorized() ->
      }))}].
 
 handle_v2_me(A) ->
-    case v2_current_admin(A) of
-        {ok, Admin} ->
+    case v2_current_principal(A) of
+        {ok, {admin, Admin}} ->
             json_ok(200, #{<<"admin">> => v2_admin_public(Admin)});
+        {ok, {user, User}} ->
+            json_ok(200, #{<<"user">> => v2_user_public(User)});
         _ ->
             v2_unauthorized()
     end.
@@ -479,10 +533,10 @@ handle_v2_register(A) ->
             case {validate_email(Email0), validate_password(Pass0)} of
                 {{ok, Email}, {ok, Pass}} ->
                     v2_with_lock(fun() ->
-                        case v2_lookup_admin_by_email(Email) of
-                            {ok, _ExistingId} ->
-                                json_error(409, <<"email_taken">>, #{});
-                            not_found ->
+                        case {v2_lookup_admin_by_email(Email), v2_lookup_user_by_email(Email)} of
+                            {{ok, _}, _} -> json_error(409, <<"email_taken">>, #{});
+                            {_, {ok, _}} -> json_error(409, <<"email_taken">>, #{});
+                            {not_found, not_found} ->
                                 AdminId = uuid_v4(),
                                 Salt = crypto:strong_rand_bytes(16),
                                 Hash = v2_password_hash(Pass, Salt),
@@ -499,7 +553,7 @@ handle_v2_register(A) ->
                                 },
                                 ok = v2_save_admin(AdminId, Admin),
                                 ok = v2_index_put_email(Email, AdminId),
-                                {SessTok, SessHdr} = v2_new_session(AdminId),
+                                {SessTok, SessHdr} = v2_new_session({admin, AdminId}),
                                 json_ok_headers(201,
                                     #{<<"admin">> => v2_admin_public(Admin), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
                                     [SessHdr])
@@ -533,7 +587,7 @@ handle_v2_login(A) ->
                                         case v2_password_verify(Pass, Admin) of
                                             true ->
                                                 v2_auth_dbg("login password_verify=true", []),
-                                                {SessTok, SessHdr} = v2_new_session(AdminId),
+                                                {SessTok, SessHdr} = v2_new_session({admin, AdminId}),
                                                 json_ok_headers(200,
                                                     #{<<"admin">> => v2_admin_public(Admin), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
                                                     [SessHdr]);
@@ -546,8 +600,27 @@ handle_v2_login(A) ->
                                         v2_unauthorized()
                                 end;
                             not_found ->
-                                v2_auth_dbg("login email not_found", []),
-                                v2_unauthorized()
+                                %% Fallback: editor/user login
+                                case v2_lookup_user_by_email(Email) of
+                                    {ok, UserId} ->
+                                        case v2_load_user(UserId) of
+                                            {ok, User} ->
+                                                case v2_password_verify(Pass, User) of
+                                                    true ->
+                                                        {SessTok, SessHdr} = v2_new_session({user, UserId}),
+                                                        json_ok_headers(200,
+                                                            #{<<"user">> => v2_user_public(User), <<"session">> => #{<<"token">> => to_bin(SessTok)}},
+                                                            [SessHdr]);
+                                                    false ->
+                                                        v2_unauthorized()
+                                                end;
+                                            _ ->
+                                                v2_unauthorized()
+                                        end;
+                                    not_found ->
+                                        v2_auth_dbg("login email not_found", []),
+                                        v2_unauthorized()
+                                end
                         end
                     end);
                 _ ->
@@ -566,8 +639,18 @@ handle_v2_login(A) ->
 v2_admin_id(Admin) ->
     binary_to_list(to_bin(maps:get(<<"id">>, Admin, <<"">>))).
 
+v2_user_id(User) ->
+    binary_to_list(to_bin(maps:get(<<"id">>, User, <<"">>))).
+
 with_v2_set_lock(AdminId, SetId, Fun) ->
     global:trans({jaktpass_v2_set, {AdminId, SetId}}, Fun, [node()], 30000).
+
+handle_v2_get_sets_principal({admin, Admin}) ->
+    handle_v2_get_sets(Admin);
+handle_v2_get_sets_principal({user, User}) ->
+    handle_v2_get_sets_user(User);
+handle_v2_get_sets_principal(_) ->
+    v2_unauthorized().
 
 handle_v2_get_sets(Admin) ->
     AdminId = v2_admin_id(Admin),
@@ -599,6 +682,39 @@ handle_v2_get_sets(Admin) ->
             json_error(500, <<"failed_to_list_sets">>, #{<<"reason">> => to_bin(Reason)})
     end.
 
+handle_v2_get_sets_user(User) ->
+    UserId = v2_user_id(User),
+    case v2_load_user_sets(UserId) of
+        {ok, SetIds0} ->
+            SetIds = [binary_to_list(to_bin(S)) || S <- SetIds0],
+            Sets = lists:foldl(
+                     fun(SetId, Acc) ->
+                         case v2_set_index_lookup(SetId) of
+                             {ok, OwnerAdminId} ->
+                                 case v2_load_set_meta(OwnerAdminId, SetId) of
+                                     {ok, Meta} ->
+                                         Name = get_in(Meta, [<<"set">>, <<"name">>]),
+                                         HasImage =
+                                             case get_in(Meta, [<<"image">>, <<"filename">>]) of
+                                                 undefined -> false;
+                                                 null -> false;
+                                                 <<>> -> false;
+                                                 _ -> true
+                                             end,
+                                         ShareId = maps:get(<<"shareId">>, Meta, null),
+                                         [#{<<"id">> => to_bin(SetId), <<"name">> => Name, <<"hasImage">> => HasImage, <<"shareId">> => ShareId} | Acc];
+                                     _ ->
+                                         Acc
+                                 end;
+                             _ ->
+                                 Acc
+                         end
+                     end, [], SetIds),
+            json_ok(200, lists:reverse(Sets));
+        _ ->
+            json_ok(200, [])
+    end.
+
 handle_v2_post_sets(Admin, A) ->
     AdminId = v2_admin_id(Admin),
     case read_json_body(A) of
@@ -618,6 +734,7 @@ handle_v2_post_sets(Admin, A) ->
                     },
                     case v2_save_set_meta(AdminId, SetId, Meta) of
                         ok ->
+                            _ = v2_set_index_put(SetId, AdminId),
                             Url = v2_share_url(ShareId),
                             json_ok(201, #{<<"id">> => to_bin(SetId), <<"shareId">> => to_bin(ShareId), <<"shareUrl">> => Url});
                         {error, Reason} ->
@@ -656,6 +773,10 @@ handle_v2_get_set(Admin, SetId) ->
         end
     end).
 
+%% Wrappers för editor-access (OwnerAdminId kommer från set-index eller admin själv)
+handle_v2_get_set_by_owner(OwnerAdminId, SetId) ->
+    handle_v2_get_set(#{<<"id">> => to_bin(OwnerAdminId)}, SetId).
+
 handle_v2_delete_set(Admin, SetId) ->
     AdminId = v2_admin_id(Admin),
     with_v2_set_lock(AdminId, SetId, fun() ->
@@ -674,6 +795,7 @@ handle_v2_delete_set(Admin, SetId) ->
                 %% Ta bort hela set-mappen (meta, bild, leaderboard, etc)
                 case delete_dir_recursive(v2_set_dir(AdminId, SetId)) of
                     ok ->
+                        _ = v2_set_index_del(SetId),
                         json_ok(200, #{<<"deleted">> => true, <<"setId">> => to_bin(SetId)});
                     {error, Reason} ->
                         json_error(500, <<"failed_to_delete_set">>, #{<<"reason">> => to_bin(Reason)})
@@ -727,6 +849,9 @@ handle_v2_post_set_image(Admin, SetId, A) ->
             json_error(400, <<"invalid_multipart">>, #{<<"details">> => Msg})
     end.
 
+handle_v2_post_set_image_by_owner(OwnerAdminId, SetId, A) ->
+    handle_v2_post_set_image(#{<<"id">> => to_bin(OwnerAdminId)}, SetId, A).
+
 handle_v2_post_set_stands(Admin, SetId, A) ->
     AdminId = v2_admin_id(Admin),
     with_v2_set_lock(AdminId, SetId, fun() ->
@@ -774,6 +899,9 @@ handle_v2_post_set_stands(Admin, SetId, A) ->
         end
     end).
 
+handle_v2_post_set_stands_by_owner(OwnerAdminId, SetId, A) ->
+    handle_v2_post_set_stands(#{<<"id">> => to_bin(OwnerAdminId)}, SetId, A).
+
 handle_v2_patch_stand(Admin, SetId, StandId0, A) ->
     AdminId = v2_admin_id(Admin),
     StandId = to_bin(StandId0),
@@ -810,6 +938,9 @@ handle_v2_patch_stand(Admin, SetId, StandId0, A) ->
         end
     end).
 
+handle_v2_patch_stand_by_owner(OwnerAdminId, SetId, StandId0, A) ->
+    handle_v2_patch_stand(#{<<"id">> => to_bin(OwnerAdminId)}, SetId, StandId0, A).
+
 handle_v2_delete_stand(Admin, SetId, StandId0) ->
     AdminId = v2_admin_id(Admin),
     StandId = to_bin(StandId0),
@@ -834,6 +965,9 @@ handle_v2_delete_stand(Admin, SetId, StandId0) ->
         end
     end).
 
+handle_v2_delete_stand_by_owner(OwnerAdminId, SetId, StandId0) ->
+    handle_v2_delete_stand(#{<<"id">> => to_bin(OwnerAdminId)}, SetId, StandId0).
+
 handle_v2_post_share(Admin, SetId) ->
     AdminId = v2_admin_id(Admin),
     with_v2_set_lock(AdminId, SetId, fun() ->
@@ -848,6 +982,198 @@ handle_v2_post_share(Admin, SetId) ->
                         _ = v2_save_set_meta(AdminId, SetId, Meta),
                         json_ok(201, #{<<"shareId">> => to_bin(ShareId), <<"shareUrl">> => v2_share_url(ShareId)})
                 end;
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+%% -------------------------
+%% V2 admin: editors/users
+%% -------------------------
+
+v2_admin_users_index_path(AdminId) ->
+    filename:join([v2_admin_dir(AdminId), "users.json"]).
+
+v2_admin_users_load(AdminId) ->
+    Path = v2_admin_users_index_path(AdminId),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                V = json_decode(Bin),
+                case is_map(V) of true -> {ok, V}; false -> {ok, #{}} end
+            catch _:_ ->
+                {ok, #{}}
+            end;
+        {error, enoent} ->
+            {ok, #{}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_admin_users_save(AdminId, Map) ->
+    Path = v2_admin_users_index_path(AdminId),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Map).
+
+handle_v2_admin_get_users(Admin) ->
+    AdminId = v2_admin_id(Admin),
+    case v2_admin_users_load(AdminId) of
+        {ok, M} ->
+            Users =
+                lists:foldl(
+                  fun({Email, UserId0}, Acc) ->
+                      case v2_load_user(UserId0) of
+                          {ok, U} ->
+                              Pub = v2_user_public(U),
+                              [Pub#{<<"email">> => to_bin(Email)} | Acc];
+                          _ -> Acc
+                      end
+                  end, [], maps:to_list(M)),
+            json_ok(200, lists:reverse(Users));
+        _ ->
+            json_ok(200, [])
+    end.
+
+handle_v2_admin_post_user(Admin, A) ->
+    AdminId = v2_admin_id(Admin),
+    case read_json_body(A) of
+        {ok, Body} ->
+            Email0 = maps:get(<<"email">>, Body, undefined),
+            Pass0 = maps:get(<<"password">>, Body, undefined),
+            case {validate_email(Email0), validate_password(Pass0)} of
+                {{ok, Email}, {ok, Pass}} ->
+                    v2_with_lock(fun() ->
+                        %% Förhindra krock med både admin- och user-email
+                        case {v2_lookup_admin_by_email(Email), v2_lookup_user_by_email(Email)} of
+                            {{ok, _}, _} -> json_error(409, <<"email_taken">>, #{});
+                            {_, {ok, _}} -> json_error(409, <<"email_taken">>, #{});
+                            {not_found, not_found} ->
+                                UserId = uuid_v4(),
+                                Salt = crypto:strong_rand_bytes(16),
+                                Hash = v2_password_hash(Pass, Salt),
+                                User = #{
+                                    <<"id">> => to_bin(UserId),
+                                    <<"email">> => Email,
+                                    <<"pw">> => #{
+                                        <<"alg">> => <<"pbkdf2_sha256">>,
+                                        <<"iter">> => 100000,
+                                        <<"salt">> => base64:encode(Salt),
+                                        <<"hash">> => base64:encode(Hash)
+                                    },
+                                    <<"createdAt">> => now_rfc3339(),
+                                    <<"createdBy">> => to_bin(AdminId)
+                                },
+                                ok = v2_save_user(UserId, User),
+                                ok = v2_user_index_put_email(Email, UserId),
+                                {ok, M0} = v2_admin_users_load(AdminId),
+                                ok = v2_admin_users_save(AdminId, M0#{Email => to_bin(UserId)}),
+                                json_ok(201, #{<<"user">> => v2_user_public(User)})
+                        end
+                    end);
+                {{error, Msg}, _} ->
+                    json_error(400, <<"invalid_email">>, #{<<"details">> => Msg});
+                {_, {error, Msg}} ->
+                    json_error(400, <<"invalid_password">>, #{<<"details">> => Msg})
+            end;
+        {error, Msg} ->
+            json_error(400, <<"invalid_json">>, #{<<"details">> => Msg})
+    end.
+
+handle_v2_get_set_editors(Admin, SetId) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                Editors0 = maps:get(<<"editors">>, Meta0, []),
+                Editors = [to_bin(E) || E <- (case is_list(Editors0) of true -> Editors0; false -> [] end)],
+                Users =
+                    lists:foldl(
+                      fun(UIdBin, Acc) ->
+                          case v2_load_user(binary_to_list(UIdBin)) of
+                              {ok, U} -> [v2_user_public(U) | Acc];
+                              _ -> Acc
+                          end
+                      end, [], Editors),
+                json_ok(200, #{<<"setId">> => to_bin(SetId), <<"editors">> => lists:reverse(Users)});
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_add_set_editor(Admin, SetId, A) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case {v2_load_set_meta(AdminId, SetId), read_json_body(A)} of
+            {{ok, Meta0}, {ok, Body}} ->
+                Email0 = maps:get(<<"email">>, Body, undefined),
+                case validate_email(Email0) of
+                    {ok, Email} ->
+                        {ok, AU} = v2_admin_users_load(AdminId),
+                        case maps:get(Email, AU, undefined) of
+                            undefined ->
+                                json_error(404, <<"user_not_found">>, #{});
+                            UserIdBin ->
+                                %% uppdatera meta.editors
+                                Editors0 = maps:get(<<"editors">>, Meta0, []),
+                                Editors = [to_bin(E) || E <- (case is_list(Editors0) of true -> Editors0; false -> [] end)],
+                                NewEditors =
+                                    case lists:member(to_bin(UserIdBin), Editors) of
+                                        true -> Editors;
+                                        false -> [to_bin(UserIdBin) | Editors]
+                                    end,
+                                Meta = Meta0#{<<"editors">> => NewEditors},
+                                ok = v2_save_set_meta(AdminId, SetId, Meta),
+                                %% säkerställ set-index (för editor-resolution)
+                                _ = v2_set_index_put(SetId, AdminId),
+                                %% lägg set i user sets-lista
+                                UserId = binary_to_list(to_bin(UserIdBin)),
+                                {ok, SetIds0} = v2_load_user_sets(UserId),
+                                SetIds = [to_bin(S) || S <- SetIds0],
+                                SetIds1 =
+                                    case lists:member(to_bin(SetId), SetIds) of
+                                        true -> SetIds;
+                                        false -> [to_bin(SetId) | SetIds]
+                                    end,
+                                ok = v2_save_user_sets(UserId, SetIds1),
+                                json_ok(200, #{<<"setId">> => to_bin(SetId), <<"added">> => true})
+                        end;
+                    _ ->
+                        json_error(400, <<"invalid_email">>, #{})
+                end;
+            {{error, enoent}, _} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {_, {error, Msg}} ->
+                json_error(400, <<"invalid_json">>, #{<<"details">> => Msg});
+            {_, {ok, _}} ->
+                json_error(500, <<"failed_to_load_set">>, #{})
+        end
+    end).
+
+handle_v2_remove_set_editor(Admin, SetId, UserId0) ->
+    AdminId = v2_admin_id(Admin),
+    UserIdBin = to_bin(UserId0),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                Editors0 = maps:get(<<"editors">>, Meta0, []),
+                Editors = [to_bin(E) || E <- (case is_list(Editors0) of true -> Editors0; false -> [] end)],
+                Editors1 = [E || E <- Editors, E =/= UserIdBin],
+                Meta = Meta0#{<<"editors">> => Editors1},
+                ok = v2_save_set_meta(AdminId, SetId, Meta),
+                %% ta bort set från user sets-lista (best effort)
+                UserId = binary_to_list(UserIdBin),
+                case v2_load_user_sets(UserId) of
+                    {ok, SetIds0} ->
+                        SetIds1 = [to_bin(S) || S <- SetIds0, to_bin(S) =/= to_bin(SetId)],
+                        _ = v2_save_user_sets(UserId, SetIds1),
+                        ok;
+                    _ -> ok
+                end,
+                json_ok(200, #{<<"setId">> => to_bin(SetId), <<"removed">> => true});
             {error, enoent} ->
                 json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
             {error, Reason} ->
@@ -1207,6 +1533,24 @@ v2_share_path(ShareId) ->
 
 v2_index_path() ->
     filename:join([v2_dir(), "admin_index.json"]).
+
+v2_user_index_path() ->
+    filename:join([v2_dir(), "user_index.json"]).
+
+v2_users_dir() ->
+    filename:join([v2_dir(), "users"]).
+
+v2_user_dir(UserId) ->
+    filename:join([v2_users_dir(), UserId]).
+
+v2_user_path(UserId) ->
+    filename:join([v2_user_dir(UserId), "user.json"]).
+
+v2_user_sets_path(UserId) ->
+    filename:join([v2_user_dir(UserId), "sets.json"]).
+
+v2_set_index_path() ->
+    filename:join([v2_dir(), "set_index.json"]).
 
 list_sets() ->
     Root = sets_dir(),
@@ -2384,6 +2728,142 @@ v2_lookup_admin_by_email(EmailBin) ->
             not_found
     end.
 
+%% --- V2 user/editor index (email -> userId) ---
+v2_user_index_load() ->
+    Path = v2_user_index_path(),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                V = json_decode(Bin),
+                case is_map(V) of true -> {ok, V}; false -> {ok, #{}} end
+            catch _:_ ->
+                {ok, #{}}
+            end;
+        {error, enoent} ->
+            {ok, #{}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_user_index_save(Map) ->
+    Path = v2_user_index_path(),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Map).
+
+v2_user_index_put_email(EmailBin, UserId0) ->
+    UserId = to_bin(UserId0),
+    {ok, M0} = v2_user_index_load(),
+    M1 = M0#{EmailBin => UserId},
+    v2_user_index_save(M1).
+
+v2_lookup_user_by_email(EmailBin) ->
+    case v2_user_index_load() of
+        {ok, M} ->
+            case maps:get(EmailBin, M, undefined) of
+                undefined -> not_found;
+                V -> {ok, binary_to_list(to_bin(V))}
+            end;
+        _ ->
+            not_found
+    end.
+
+v2_save_user(UserId0, User) ->
+    UserId = to_bin(UserId0),
+    Path = v2_user_path(binary_to_list(UserId)),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, User).
+
+v2_load_user(UserId0) ->
+    UserId = to_bin(UserId0),
+    Path = v2_user_path(binary_to_list(UserId)),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try {ok, json_decode(Bin)} catch _:_ -> {error, invalid_json} end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_user_public(User) ->
+    #{<<"id">> => maps:get(<<"id">>, User, null),
+      <<"email">> => maps:get(<<"email">>, User, null),
+      <<"createdAt">> => maps:get(<<"createdAt">>, User, null),
+      <<"createdBy">> => maps:get(<<"createdBy">>, User, null)}.
+
+%% --- V2 user -> sets access list (for editors) ---
+v2_load_user_sets(UserId0) ->
+    UserId = to_bin(UserId0),
+    Path = v2_user_sets_path(binary_to_list(UserId)),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                V = json_decode(Bin),
+                case is_list(V) of true -> {ok, V}; false -> {ok, []} end
+            catch _:_ ->
+                {ok, []}
+            end;
+        {error, enoent} ->
+            {ok, []};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_save_user_sets(UserId0, SetIds) ->
+    UserId = to_bin(UserId0),
+    Path = v2_user_sets_path(binary_to_list(UserId)),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, SetIds).
+
+%% --- V2 set index (setId -> ownerAdminId), for editor access resolution ---
+v2_set_index_load() ->
+    Path = v2_set_index_path(),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            try
+                V = json_decode(Bin),
+                case is_map(V) of true -> {ok, V}; false -> {ok, #{}} end
+            catch _:_ ->
+                {ok, #{}}
+            end;
+        {error, enoent} ->
+            {ok, #{}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+v2_set_index_save(Map) ->
+    Path = v2_set_index_path(),
+    ok = filelib:ensure_dir(Path),
+    write_json_atomic(Path, Map).
+
+v2_set_index_put(SetId0, OwnerAdminId0) ->
+    SetId = to_bin(SetId0),
+    OwnerAdminId = to_bin(OwnerAdminId0),
+    {ok, M0} = v2_set_index_load(),
+    M1 = M0#{SetId => OwnerAdminId},
+    v2_set_index_save(M1).
+
+v2_set_index_del(SetId0) ->
+    SetId = to_bin(SetId0),
+    {ok, M0} = v2_set_index_load(),
+    M1 = maps:remove(SetId, M0),
+    v2_set_index_save(M1).
+
+v2_set_index_lookup(SetId0) ->
+    SetId = case SetId0 of
+                B when is_binary(B) -> B;
+                L when is_list(L) -> list_to_binary(L);
+                _ -> <<>>
+            end,
+    case v2_set_index_load() of
+        {ok, M} ->
+            case maps:get(SetId, M, undefined) of
+                undefined -> not_found;
+                V -> {ok, binary_to_list(to_bin(V))}
+            end;
+        _ ->
+            not_found
+    end.
+
 v2_save_admin(AdminId0, Admin) ->
     AdminId = to_bin(AdminId0),
     Path = v2_admin_path(binary_to_list(AdminId)),
@@ -2475,15 +2955,29 @@ v2_set_cookie_header_expire() ->
     %% Expire cookie
     {header, {"Set-Cookie", "jaktpass_v2=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"}}.
 
-v2_new_session(AdminId0) ->
+v2_new_session({admin, AdminId0}) ->
     AdminId = to_bin(AdminId0),
     TokBin = crypto:strong_rand_bytes(24),
     Tok = base64url_encode(TokBin),
-    Sess = #{<<"adminId">> => AdminId, <<"createdAt">> => now_rfc3339()},
+    Sess = #{<<"t">> => <<"admin">>, <<"adminId">> => AdminId, <<"createdAt">> => now_rfc3339()},
     Path = v2_session_path(Tok),
     ok = filelib:ensure_dir(Path),
     ok = write_json_atomic(Path, Sess),
-    {Tok, v2_set_cookie_header(Tok)}.
+    {Tok, v2_set_cookie_header(Tok)};
+
+v2_new_session({user, UserId0}) ->
+    UserId = to_bin(UserId0),
+    TokBin = crypto:strong_rand_bytes(24),
+    Tok = base64url_encode(TokBin),
+    Sess = #{<<"t">> => <<"user">>, <<"userId">> => UserId, <<"createdAt">> => now_rfc3339()},
+    Path = v2_session_path(Tok),
+    ok = filelib:ensure_dir(Path),
+    ok = write_json_atomic(Path, Sess),
+    {Tok, v2_set_cookie_header(Tok)};
+
+%% Backward compat: tidigare signatur v2_new_session(AdminId)
+v2_new_session(AdminId0) ->
+    v2_new_session({admin, AdminId0}).
 
 v2_delete_session(A) ->
     case v2_get_cookie(A#arg.headers, v2_cookie_name()) of
@@ -2494,7 +2988,7 @@ v2_delete_session(A) ->
             ok
     end.
 
-v2_current_admin(A) ->
+v2_current_principal(A) ->
     Tok0 = v2_get_cookie(A#arg.headers, v2_cookie_name()),
     v2_auth_dbg("me cookie_tok_present=~p cookie_repr=~p", [Tok0 =/= undefined, v2_cookie_repr(A#arg.headers)]),
     case Tok0 of
@@ -2505,13 +2999,38 @@ v2_current_admin(A) ->
                 {ok, Bin} ->
                     try
                         Sess = json_decode(Bin),
-                        AdminIdB = maps:get(<<"adminId">>, Sess, undefined),
-                        case AdminIdB of
-                            undefined -> error;
+                        T = maps:get(<<"t">>, Sess, undefined),
+                        case T of
+                            <<"user">> ->
+                                UserIdB = maps:get(<<"userId">>, Sess, undefined),
+                                case UserIdB of
+                                    undefined -> error;
+                                    _ ->
+                                        case v2_load_user(binary_to_list(to_bin(UserIdB))) of
+                                            {ok, User} -> {ok, {user, User}};
+                                            _ -> error
+                                        end
+                                end;
+                            <<"admin">> ->
+                                AdminIdB = maps:get(<<"adminId">>, Sess, undefined),
+                                case AdminIdB of
+                                    undefined -> error;
+                                    _ ->
+                                        case v2_load_admin(binary_to_list(to_bin(AdminIdB))) of
+                                            {ok, Admin} -> {ok, {admin, Admin}};
+                                            _ -> error
+                                        end
+                                end;
                             _ ->
-                                case v2_load_admin(binary_to_list(to_bin(AdminIdB))) of
-                                    {ok, Admin} -> {ok, Admin};
-                                    _ -> error
+                                %% Backward compat: session utan "t" tolkas som admin
+                                AdminIdB = maps:get(<<"adminId">>, Sess, undefined),
+                                case AdminIdB of
+                                    undefined -> error;
+                                    _ ->
+                                        case v2_load_admin(binary_to_list(to_bin(AdminIdB))) of
+                                            {ok, Admin} -> {ok, {admin, Admin}};
+                                            _ -> error
+                                        end
                                 end
                         end
                     catch _:_ ->
@@ -2521,6 +3040,12 @@ v2_current_admin(A) ->
                     v2_auth_dbg("me session_not_found tok_prefix=~p path=~p", [v2_tok_prefix(Tok), Path]),
                     error
             end
+    end.
+
+v2_current_admin(A) ->
+    case v2_current_principal(A) of
+        {ok, {admin, Admin}} -> {ok, Admin};
+        _ -> error
     end.
 
 v2_get_cookie(H, Name) when is_record(H, headers) ->
