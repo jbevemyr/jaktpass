@@ -2,7 +2,7 @@
 %%% jaktpass_appmod.erl - Yaws appmod for jaktpass MVP
 %%%
 %%% All API routing goes via /api (yaws.conf: appmods = <"/api", jaktpass_appmod>)
-%%% Persistence: JSON + image files on disk under JAKTPASS_DATA_DIR (default ./data)
+%%% Persistence: JSON + image files on disk under JAKTPASS_DATA_DIR (default ./priv/data)
 %%% Admin protection: Basic Auth for /api/admin/*
 %%%-------------------------------------------------------------------
 
@@ -33,11 +33,11 @@ out(A) ->
         dispatch(Method, Segs, A)
     catch
         Class:Reason:Stack ->
-            io:format("~p:~p~n~p~n", [Class,Reason, Stack]),
+            dbg_log("JAKTPASS_DEBUG_ERRORS", "jaktpass error: ~p:~p~n~p~n", [Class, Reason, Stack]),
             json_error(500, <<"internal_error">>, #{
                 <<"class">> => to_bin(Class),
                 <<"reason">> => to_bin(io_lib:format("~p", [Reason])),
-                  <<"stack">> => to_bin(io_lib:format("~p", [Stack]))
+                <<"stack">> => to_bin(io_lib:format("~p", [Stack]))
             })
      end.
 
@@ -2052,19 +2052,34 @@ recv_body_loop(ArgOrCont, Acc) ->
     end.
 
 multipart_dbg(Fmt, Args) ->
-    case getenv_default("JAKTPASS_DEBUG_MULTIPART", "false") of
-        "1" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
-        "true" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
-        "yes" -> error_logger:info_msg("jaktpass multipart: " ++ Fmt ++ "~n", Args);
-        _ -> ok
-    end.
+    dbg_log("JAKTPASS_DEBUG_MULTIPART", "jaktpass multipart: " ++ Fmt ++ "~n", Args).
 
 v2_auth_dbg(Fmt, Args) ->
-    case getenv_default("JAKTPASS_DEBUG_V2_AUTH", "false") of
-        "1" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
-        "true" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
-        "yes" -> error_logger:info_msg("jaktpass v2 auth: " ++ Fmt ++ "~n", Args);
-        _ -> ok
+    dbg_log("JAKTPASS_DEBUG_V2_AUTH", "jaktpass v2 auth: " ++ Fmt ++ "~n", Args).
+
+dbg_enabled(EnvVar) ->
+    case string:lowercase(getenv_default(EnvVar, "false")) of
+        "1" -> true;
+        "true" -> true;
+        "yes" -> true;
+        _ -> false
+    end.
+
+dbg_log(EnvVar, Fmt, Args) ->
+    case dbg_enabled(EnvVar) of
+        true -> log_info(Fmt, Args);
+        false -> ok
+    end.
+
+log_info(Fmt, Args) ->
+    %% OTP22 har logger, men håll fallback enkel om något saknas.
+    case erlang:function_exported(logger, info, 2) of
+        true ->
+            _ = logger:info(Fmt, Args),
+            ok;
+        false ->
+            io:format(Fmt, Args),
+            ok
     end.
 
 type_tag(V) when is_binary(V) -> binary;
