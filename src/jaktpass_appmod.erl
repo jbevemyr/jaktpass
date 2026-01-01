@@ -3042,12 +3042,6 @@ v2_current_principal(A) ->
             end
     end.
 
-v2_current_admin(A) ->
-    case v2_current_principal(A) of
-        {ok, {admin, Admin}} -> {ok, Admin};
-        _ -> error
-    end.
-
 v2_get_cookie(H, Name) when is_record(H, headers) ->
     %% Försök först Yaws inbyggda cookie-hjälp (mer robust mellan versioner)
     Cookies = H#headers.cookie,
