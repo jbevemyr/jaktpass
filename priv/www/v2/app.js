@@ -570,6 +570,96 @@ function displayStandName(name) {
   return s.replace(/^(pass)\s+/i, "").trim();
 }
 
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function openPrintMapWithLabels(meta, titleText) {
+  const imageUrl = meta?.imageUrl;
+  if (!imageUrl) return toast("Ingen bild att skriva ut.");
+
+  const imgSrc = cacheBustUrl(imageUrl, meta?.image?.uploadedAt || Date.now());
+  const stands = asArray(meta?.stands).map((s) => ({
+    id: s?.id,
+    x: Number(s?.x || 0),
+    y: Number(s?.y || 0),
+    name: displayStandName(s?.name || ""),
+  }));
+
+  const labelsHtml = stands
+    .filter((s) => isFinite(s.x) && isFinite(s.y) && s.name)
+    .map((s) =>
+      `<div class="lbl" style="left:${(s.x * 100).toFixed(4)}%;top:${(s.y * 100).toFixed(4)}%">${escapeHtml(s.name)}</div>`
+    )
+    .join("");
+
+  const w = window.open("", "_blank");
+  if (!w) return toast("Popup blockerad. Tillåt popup-fönster för att skriva ut.");
+
+  const title = escapeHtml(titleText || "Karta");
+  w.document.open();
+  w.document.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .wrap { padding: 12px; }
+    h1 { font-size: 16px; margin: 0 0 8px 0; }
+    .map { position: relative; display: inline-block; }
+    img { display:block; max-width: 100%; height: auto; }
+    .lbl{
+      position:absolute;
+      transform: translate(-50%, calc(-100% - 6px));
+      background:#fff;
+      color:#000;
+      border:1px solid #000;
+      border-radius:6px;
+      padding:2px 4px;
+      font-size:12px;
+      line-height:1.2;
+      white-space:nowrap;
+      max-width: 320px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      pointer-events:none;
+    }
+    @media print {
+      .wrap { padding: 0; }
+      h1 { display:none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>${title}</h1>
+    <div class="map">
+      <img id="img" src="${imgSrc}" alt="Karta">
+      ${labelsHtml}
+    </div>
+  </div>
+  <script>
+    (function(){
+      var img = document.getElementById('img');
+      function go(){ try { window.focus(); window.print(); } catch(e) {} }
+      if (img && img.complete) setTimeout(go, 50);
+      else if (img) img.addEventListener('load', function(){ setTimeout(go, 50); });
+      else setTimeout(go, 50);
+    })();
+  </script>
+</body>
+</html>`);
+  w.document.close();
+}
+
 async function fetchSet(setId) {
   const r = await api(`/api/v2/sets/${encodeURIComponent(setId)}`);
   const data = r?.data || null;
@@ -1038,6 +1128,16 @@ async function renderAdmin() {
         await renderAdmin();
       });
       up.appendChild(label("Visa namn på kartan", cbLabels));
+
+      const btnPrint = document.createElement("button");
+      btnPrint.className = "secondary";
+      btnPrint.textContent = "Skriv ut";
+      btnPrint.disabled = !(meta && meta.imageUrl);
+      btnPrint.addEventListener("click", () => {
+        const title = (selected && selected.name) ? `${selected.name} – Karta` : "Karta";
+        openPrintMapWithLabels(meta, title);
+      });
+      up.appendChild(btnPrint);
 
       const file = document.createElement("input");
       file.type = "file";
