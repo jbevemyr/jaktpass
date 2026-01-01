@@ -591,6 +591,11 @@ function openPrintMapWithLabels(meta, titleText) {
     name: displayStandName(s?.name || ""),
   }));
 
+  const dotsHtml = stands
+    .filter((s) => isFinite(s.x) && isFinite(s.y))
+    .map((s) => `<div class="dot" style="left:${(s.x * 100).toFixed(4)}%;top:${(s.y * 100).toFixed(4)}%"></div>`)
+    .join("");
+
   const labelsHtml = stands
     .filter((s) => isFinite(s.x) && isFinite(s.y) && s.name)
     .map((s) =>
@@ -616,6 +621,18 @@ function openPrintMapWithLabels(meta, titleText) {
     h1 { font-size: 16px; margin: 0 0 8px 0; }
     .map { position: relative; display: inline-block; }
     img { display:block; max-width: 100%; height: auto; }
+    .dot{
+      position:absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #fff;
+      border: 2px solid #000;
+      transform: translate(-50%, -50%);
+      box-sizing: border-box;
+      z-index: 1;
+      pointer-events:none;
+    }
     .lbl{
       position:absolute;
       transform: translate(-50%, calc(-100% - 6px));
@@ -631,6 +648,7 @@ function openPrintMapWithLabels(meta, titleText) {
       overflow:hidden;
       text-overflow:ellipsis;
       pointer-events:none;
+      z-index: 2;
     }
     @media print {
       .wrap { padding: 0; }
@@ -643,6 +661,7 @@ function openPrintMapWithLabels(meta, titleText) {
     <h1>${title}</h1>
     <div class="map">
       <img id="img" src="${imgSrc}" alt="Karta">
+      ${dotsHtml}
       ${labelsHtml}
     </div>
   </div>
