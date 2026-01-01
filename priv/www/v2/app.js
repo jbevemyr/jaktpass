@@ -976,7 +976,24 @@ async function renderAdmin() {
       v2state.moveStandId = null;
       await renderAdmin();
     });
-    sec.appendChild(row([label("Välj set", sel)]));
+    const btnDelSet = document.createElement("button");
+    btnDelSet.className = "danger";
+    btnDelSet.textContent = "Radera set";
+    btnDelSet.addEventListener("click", async () => {
+      const sid = v2state.selectedSetId;
+      if (!sid) return;
+      const nm = (sets.find((x) => x.id === sid) || {}).name || sid;
+      if (!confirm(`Radera set "${nm}"? Detta går inte att ångra.`)) return;
+      try {
+        await api(`/api/v2/sets/${encodeURIComponent(sid)}`, { method: "DELETE" });
+        toast("Set raderat.");
+        v2state.selectedSetId = null;
+        await renderAdmin();
+      } catch {
+        toast("Kunde inte radera set.");
+      }
+    });
+    sec.appendChild(row([label("Välj set", sel), btnDelSet]));
 
     let meta = null;
     try {

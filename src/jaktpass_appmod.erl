@@ -91,6 +91,8 @@ dispatch('POST', ["v2", "sets"], A) ->
     with_v2_admin(A, fun(Admin) -> handle_v2_post_sets(Admin, A) end);
 dispatch('GET', ["v2", "sets", SetId], A) ->
     with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_get_set(Admin, SId) end) end);
+dispatch('DELETE', ["v2", "sets", SetId], A) ->
+    with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_delete_set(Admin, SId) end) end);
 dispatch('POST', ["v2", "sets", SetId, "image"], A) ->
     with_v2_admin(A, fun(Admin) -> with_valid_set_id(SetId, fun(SId) -> handle_v2_post_set_image(Admin, SId, A) end) end);
 dispatch('POST', ["v2", "sets", SetId, "stands"], A) ->
@@ -647,6 +649,35 @@ handle_v2_get_set(Admin, SetId) ->
                 Meta1 = Meta0#{<<"stands">> => Stands},
                 Meta = Meta1#{<<"imageUrl">> => ImageUrl},
                 json_ok(200, Meta);
+            {error, enoent} ->
+                json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
+            {error, Reason} ->
+                json_error(500, <<"failed_to_load_set">>, #{<<"reason">> => to_bin(Reason)})
+        end
+    end).
+
+handle_v2_delete_set(Admin, SetId) ->
+    AdminId = v2_admin_id(Admin),
+    with_v2_set_lock(AdminId, SetId, fun() ->
+        case v2_load_set_meta(AdminId, SetId) of
+            {ok, Meta0} ->
+                %% Ta bort ev. share-fil så quiz-länken blir ogiltig
+                ShareId0 = maps:get(<<"shareId">>, Meta0, null),
+                _ = case ShareId0 of
+                        B when is_binary(B), byte_size(B) > 0 ->
+                            file:delete(v2_share_path(binary_to_list(B)));
+                        L when is_list(L), length(L) > 0 ->
+                            file:delete(v2_share_path(L));
+                        _ ->
+                            ok
+                    end,
+                %% Ta bort hela set-mappen (meta, bild, leaderboard, etc)
+                case delete_dir_recursive(v2_set_dir(AdminId, SetId)) of
+                    ok ->
+                        json_ok(200, #{<<"deleted">> => true, <<"setId">> => to_bin(SetId)});
+                    {error, Reason} ->
+                        json_error(500, <<"failed_to_delete_set">>, #{<<"reason">> => to_bin(Reason)})
+                end;
             {error, enoent} ->
                 json_error(404, <<"set_not_found">>, #{<<"setId">> => to_bin(SetId)});
             {error, Reason} ->

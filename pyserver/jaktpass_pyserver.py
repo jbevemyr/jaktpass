@@ -879,6 +879,32 @@ class Handler(BaseHTTPRequestHandler):
                         meta["imageUrl"] = (f"/api/v2/media/shares/{share_id}/image" if (share_id and img) else None)
                         return self._ok(meta)
 
+                    if method == "DELETE" and len(v2) == 2 and v2[0] == "sets":
+                        set_id = unquote(v2[1])
+                        if not validate_set_id(set_id):
+                            return self._err(400, "invalid_set_id", {"setId": set_id})
+                        try:
+                            meta = v2_load_set_meta(admin_id, set_id)
+                        except FileNotFoundError:
+                            return self._err(404, "set_not_found", {"setId": set_id})
+                        except Exception as e:
+                            return self._err(500, "failed_to_load_set", {"error": str(e)})
+
+                        share_id = str(meta.get("shareId") or "")
+                        try:
+                            # Gör quiz-länken ogiltig
+                            if share_id:
+                                try:
+                                    v2_share_path(share_id).unlink()
+                                except FileNotFoundError:
+                                    pass
+                            # Ta bort hela set-mappen (meta, bild, leaderboard, etc)
+                            import shutil
+                            shutil.rmtree(v2_set_dir(admin_id, set_id), ignore_errors=True)
+                        except Exception as e:
+                            return self._err(500, "failed_to_delete_set", {"error": str(e)})
+                        return self._ok({"deleted": True, "setId": set_id, "shareId": share_id})
+
                     if method == "POST" and len(v2) == 3 and v2[0] == "sets" and v2[2] == "image":
                         set_id = unquote(v2[1])
                         if not validate_set_id(set_id):
