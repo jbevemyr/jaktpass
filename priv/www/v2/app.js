@@ -883,11 +883,30 @@ function setRow(setObj) {
     navTo(`#/quiz/${setObj.shareId}`);
   });
 
+  const btnDelSet = document.createElement("button");
+  btnDelSet.className = "danger";
+  btnDelSet.textContent = "Radera set";
+  btnDelSet.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const sid = setObj.id;
+    const nm = setObj.name || sid;
+    if (!confirm(`Radera set "${nm}"? Detta går inte att ångra.`)) return;
+    try {
+      await api(`/api/v2/sets/${encodeURIComponent(sid)}`, { method: "DELETE" });
+      toast("Set raderat.");
+      if (v2state.selectedSetId === sid) v2state.selectedSetId = null;
+      await renderAdmin();
+    } catch {
+      toast("Kunde inte radera set.");
+    }
+  });
+
   const right = document.createElement("div");
   right.className = "row";
   right.style.gap = "8px";
   right.appendChild(btnShare);
   right.appendChild(btnQuiz);
+  right.appendChild(btnDelSet);
 
   d.appendChild(left);
   d.appendChild(right);
@@ -962,91 +981,67 @@ async function renderAdmin() {
     const sec = document.createElement("div");
     sec.style.marginTop = "14px";
     sec.appendChild(h2("Bild & punkter"));
-
-    const sel = document.createElement("select");
-    sets.forEach((s) => {
-      const o = document.createElement("option");
-      o.value = s.id;
-      o.textContent = s.name;
-      sel.appendChild(o);
-    });
-    sel.value = v2state.selectedSetId;
-    sel.addEventListener("change", async () => {
-      v2state.selectedSetId = sel.value;
-      v2state.moveStandId = null;
-      await renderAdmin();
-    });
-    const btnDelSet = document.createElement("button");
-    btnDelSet.className = "danger";
-    btnDelSet.textContent = "Radera set";
-    btnDelSet.addEventListener("click", async () => {
-      const sid = v2state.selectedSetId;
-      if (!sid) return;
-      const nm = (sets.find((x) => x.id === sid) || {}).name || sid;
-      if (!confirm(`Radera set "${nm}"? Detta går inte att ångra.`)) return;
-      try {
-        await api(`/api/v2/sets/${encodeURIComponent(sid)}`, { method: "DELETE" });
-        toast("Set raderat.");
-        v2state.selectedSetId = null;
-        await renderAdmin();
-      } catch {
-        toast("Kunde inte radera set.");
-      }
-    });
-    sec.appendChild(row([label("Välj set", sel), btnDelSet]));
+    const selected = sets.find((s) => s.id === v2state.selectedSetId) || null;
+    sec.appendChild(pSmall(selected ? `Valt set: ${selected.name}` : "Välj ett set i listan ovan."));
 
     let meta = null;
-    try {
-      meta = await fetchSet(v2state.selectedSetId);
-    } catch {
-      meta = null;
+    if (v2state.selectedSetId) {
+      try {
+        meta = await fetchSet(v2state.selectedSetId);
+      } catch {
+        meta = null;
+      }
     }
 
-    const up = document.createElement("div");
-    up.className = "row";
-    up.style.gap = "8px";
-    up.style.alignItems = "center";
-    const file = document.createElement("input");
-    file.type = "file";
-    file.accept = "image/png,image/jpeg,image/webp";
-    const btnUp = document.createElement("button");
-    btnUp.textContent = "Ladda upp bild";
-    btnUp.addEventListener("click", async () => {
-      const f = file.files && file.files[0];
-      if (!f) return toast("Välj en bildfil.");
-      const fd = new FormData();
-      fd.append("file", f, f.name);
-      try {
-        await apiForm(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/image`, fd);
-        toast("Uppladdat.");
-        await renderAdmin();
-      } catch {
-        toast("Kunde inte ladda upp.");
-      }
-    });
-    const btnCancelMove = document.createElement("button");
-    btnCancelMove.className = "secondary";
-    btnCancelMove.textContent = "Avbryt flytt";
-    btnCancelMove.style.display = v2state.moveStandId ? "" : "none";
-    btnCancelMove.addEventListener("click", async () => {
-      v2state.moveStandId = null;
-      toast("Avbrutet.");
-      await renderAdmin();
-    });
-    up.appendChild(file);
-    up.appendChild(btnUp);
-    up.appendChild(btnCancelMove);
-    sec.appendChild(up);
-
-    if (meta) {
-      sec.appendChild(renderMapEditor(meta, v2state.selectedSetId));
-
-      const stands = asArray(meta.stands);
-      sec.appendChild(h2(`Punkter (${stands.length})`));
-      if (!stands.length) sec.appendChild(pSmall("Inga punkter ännu. Klicka på kartan för att skapa."));
-      else stands.forEach((s) => sec.appendChild(standRow(v2state.selectedSetId, s)));
+    if (!v2state.selectedSetId) {
+      sec.appendChild(pSmall("Välj ett set för att kunna ladda upp bild och redigera punkter."));
     } else {
-      sec.appendChild(pSmall("Kunde inte läsa set-data."));
+      const up = document.createElement("div");
+      up.className = "row";
+      up.style.gap = "8px";
+      up.style.alignItems = "center";
+      const file = document.createElement("input");
+      file.type = "file";
+      file.accept = "image/png,image/jpeg,image/webp";
+      const btnUp = document.createElement("button");
+      btnUp.textContent = "Ladda upp bild";
+      btnUp.addEventListener("click", async () => {
+        const f = file.files && file.files[0];
+        if (!f) return toast("Välj en bildfil.");
+        const fd = new FormData();
+        fd.append("file", f, f.name);
+        try {
+          await apiForm(`/api/v2/sets/${encodeURIComponent(v2state.selectedSetId)}/image`, fd);
+          toast("Uppladdat.");
+          await renderAdmin();
+        } catch {
+          toast("Kunde inte ladda upp.");
+        }
+      });
+      const btnCancelMove = document.createElement("button");
+      btnCancelMove.className = "secondary";
+      btnCancelMove.textContent = "Avbryt flytt";
+      btnCancelMove.style.display = v2state.moveStandId ? "" : "none";
+      btnCancelMove.addEventListener("click", async () => {
+        v2state.moveStandId = null;
+        toast("Avbrutet.");
+        await renderAdmin();
+      });
+      up.appendChild(file);
+      up.appendChild(btnUp);
+      up.appendChild(btnCancelMove);
+      sec.appendChild(up);
+
+      if (meta) {
+        sec.appendChild(renderMapEditor(meta, v2state.selectedSetId));
+
+        const stands = asArray(meta.stands);
+        sec.appendChild(h2(`Punkter (${stands.length})`));
+        if (!stands.length) sec.appendChild(pSmall("Inga punkter ännu. Klicka på kartan för att skapa."));
+        else stands.forEach((s) => sec.appendChild(standRow(v2state.selectedSetId, s)));
+      } else {
+        sec.appendChild(pSmall("Kunde inte läsa set-data."));
+      }
     }
 
     wrap.appendChild(sec);
