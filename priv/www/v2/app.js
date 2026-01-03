@@ -1077,16 +1077,25 @@ function setRow(setObj) {
   btnShare.addEventListener("click", async (e) => {
     // klick på knappar ska inte byta vald rad
     e.stopPropagation();
-    try {
-      const r = await api(`/api/v2/sets/${encodeURIComponent(setObj.id)}/share`, { method: "POST" });
-      const url0 = r?.data?.shareUrl || "";
-      const url = url0 && String(url0).startsWith("http") ? String(url0) : (location.origin + String(url0 || ""));
-      const i = $("#v2-share-url");
-      if (i) i.value = url;
-      toast("Länk klar.");
-    } catch {
-      toast("Kunde inte skapa länk.");
+    if (isAdmin) {
+      try {
+        const r = await api(`/api/v2/sets/${encodeURIComponent(setObj.id)}/share`, { method: "POST" });
+        const url0 = r?.data?.shareUrl || "";
+        const url = url0 && String(url0).startsWith("http") ? String(url0) : (location.origin + String(url0 || ""));
+        const i = $("#v2-share-url");
+        if (i) i.value = url;
+        toast("Länk klar.");
+      } catch {
+        toast("Kunde inte skapa länk.");
+      }
+      return;
     }
+    // Redaktör: shareId ska redan finnas (read-only), bygg URL lokalt
+    if (!setObj.shareId) return toast("Ingen länk finns för detta set.");
+    const url = `${location.origin}/v2/#/quiz/${setObj.shareId}`;
+    const i = $("#v2-share-url");
+    if (i) i.value = url;
+    toast("Länk klar.");
   });
 
   const btnQuiz = document.createElement("button");
@@ -1119,7 +1128,7 @@ function setRow(setObj) {
   const right = document.createElement("div");
   right.className = "row";
   right.style.gap = "8px";
-  if (isAdmin) right.appendChild(btnShare);
+  right.appendChild(btnShare);
   right.appendChild(btnQuiz);
   if (isAdmin) right.appendChild(btnDelSet);
 
