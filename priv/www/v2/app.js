@@ -61,9 +61,13 @@ function getOrCreateFinishModal() {
   list.style.marginTop = "6px";
 
   const btnClose = document.createElement("button");
+  btnClose.id = "v2-finish-close";
   btnClose.className = "secondary";
-  btnClose.textContent = "Stäng";
-  btnClose.addEventListener("click", () => showFinishModal(false));
+  btnClose.textContent = "Tillbaka";
+
+  const btnRestart = document.createElement("button");
+  btnRestart.id = "v2-finish-restart";
+  btnRestart.textContent = "Starta om";
 
   const row1 = document.createElement("div");
   row1.className = "row";
@@ -73,8 +77,9 @@ function getOrCreateFinishModal() {
 
   const row2 = document.createElement("div");
   row2.className = "row";
-  row2.style.justifyContent = "flex-end";
+  row2.style.justifyContent = "space-between";
   row2.appendChild(btnClose);
+  row2.appendChild(btnRestart);
 
   card.appendChild(title);
   card.appendChild(score);
@@ -120,6 +125,8 @@ async function showFinishModal(opts, scoreValue, shareId, mode) {
   const name = document.querySelector("#v2-finish-name");
   const btnSave = document.querySelector("#v2-finish-save");
   const list = document.querySelector("#v2-finish-leaderboard");
+  const btnClose = document.querySelector("#v2-finish-close");
+  const btnRestart = document.querySelector("#v2-finish-restart");
 
   if (!opts) {
     m.style.display = "none";
@@ -148,6 +155,18 @@ async function showFinishModal(opts, scoreValue, shareId, mode) {
     } catch {
       toast("Kunde inte spara.");
     }
+  };
+
+  // Tillbaka till quiz-alternativ (stäng modal, visa quiz-start för samma share)
+  btnClose.onclick = async () => {
+    showFinishModal(false);
+    await renderQuiz(shareId, { mode: mode || "all", autoStart: false });
+  };
+
+  // Starta om direkt (stäng modal och starta ny runda med samma mode)
+  btnRestart.onclick = async () => {
+    showFinishModal(false);
+    await renderQuiz(shareId, { mode: mode || "all", autoStart: true });
   };
 
   m.style.display = "";
@@ -1116,8 +1135,10 @@ async function renderAdmin() {
   const isAdmin = me.type === "admin";
 
   const wrap = document.createElement("div");
-  wrap.appendChild(h2("Mina set"));
   wrap.appendChild(pSmall(`Inloggad som ${me.email}. ${isAdmin ? "Administratör" : "Redaktör"}.`));
+
+  const secSets = document.createElement("div");
+  secSets.appendChild(h2("Mina set"));
 
   if (isAdmin) {
     const name = document.createElement("input");
@@ -1138,7 +1159,7 @@ async function renderAdmin() {
         toast("Kunde inte skapa set.");
       }
     });
-    wrap.appendChild(row([label("Nytt set", name), btnCreate]));
+    secSets.appendChild(row([label("Nytt set", name), btnCreate]));
   }
 
   const shareUrl = document.createElement("input");
@@ -1161,7 +1182,7 @@ async function renderAdmin() {
   cr.className = "copyrow";
   cr.appendChild(shareUrl);
   cr.appendChild(btnCopy);
-  wrap.appendChild(cr);
+  secSets.appendChild(cr);
 
   let sets = [];
   try {
@@ -1170,8 +1191,10 @@ async function renderAdmin() {
   } catch {
     sets = [];
   }
-  if (!sets.length) wrap.appendChild(pSmall("Inga set ännu."));
-  else sets.forEach((s) => wrap.appendChild(setRow({ ...s, _isAdmin: isAdmin })));
+  if (!sets.length) secSets.appendChild(pSmall("Inga set ännu."));
+  else sets.forEach((s) => secSets.appendChild(setRow({ ...s, _isAdmin: isAdmin })));
+
+  wrap.appendChild(secSets);
 
   // ---- Redigera set: bild + pass ----
   if (sets.length) {
@@ -1232,7 +1255,8 @@ async function renderAdmin() {
       file.type = "file";
       file.accept = "image/png,image/jpeg,image/webp";
       const btnUp = document.createElement("button");
-      btnUp.textContent = "Ladda upp bild";
+      const hasImage = !!(meta && meta.imageUrl);
+      btnUp.textContent = hasImage ? "Byt bild" : "Ladda upp bild";
       btnUp.addEventListener("click", async () => {
         const f = file.files && file.files[0];
         if (!f) return toast("Välj en bildfil.");
@@ -1373,7 +1397,7 @@ async function renderAdmin() {
   render(wrap);
 }
 
-async function renderQuiz(shareId) {
+async function renderQuiz(shareId, opts = {}) {
   const wrap = document.createElement("div");
   wrap.appendChild(h2("Quiz"));
   wrap.appendChild(pSmall("Denna länk är hemlig: den som har länken kan spela."));
@@ -1399,7 +1423,9 @@ async function renderQuiz(shareId) {
   q.style.marginTop = "10px";
   q.textContent = "Tryck Start.";
 
-  btnStart.addEventListener("click", async () => {
+  if (opts && opts.mode) mode.value = String(opts.mode);
+
+  async function startQuiz() {
     try {
       const qs = new URLSearchParams();
       qs.set("mode", mode.value);
@@ -1506,12 +1532,18 @@ async function renderQuiz(shareId) {
     } catch {
       toast("Kunde inte starta quiz.");
     }
-  });
+  }
+
+  btnStart.addEventListener("click", startQuiz);
 
   wrap.appendChild(row([label("Antal", mode), btnStart]));
   wrap.appendChild(q);
   wrap.appendChild(map);
   render(wrap);
+
+  if (opts && opts.autoStart) {
+    startQuiz();
+  }
 }
 
 async function onRoute() {
