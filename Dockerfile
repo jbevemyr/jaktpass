@@ -9,6 +9,7 @@ WORKDIR /app
 COPY . /app
 
 RUN mkdir -p /var/log/yaws /app/priv/data \
+    && make clean \
     && make compile
 
 ENV JAKTPASS_DATA_DIR=/app/priv/data \
