@@ -1,4 +1,4 @@
-FROM erlang:26-slim
+FROM erlang:25-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends yaws make \
