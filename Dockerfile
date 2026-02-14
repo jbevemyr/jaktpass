@@ -18,4 +18,4 @@ ENV JAKTPASS_DATA_DIR=/app/priv/data \
 
 EXPOSE 8080
 
-CMD ["yaws", "-i", "-c", "/app/yaws.conf"]
+CMD ["yaws", "-c", "/app/yaws.conf", "--erlarg", "-noshell -noinput"]
