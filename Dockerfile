@@ -1,7 +1,10 @@
-FROM erlang:25-slim
+FROM ubuntu:22.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends yaws make \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        erlang \
+        yaws \
+        make \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
