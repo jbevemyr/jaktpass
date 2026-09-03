@@ -483,3 +483,83 @@ button.danger { background: var(--danger); color: #0b0d10; }
   min-width: 96px;
 }
 
+
+/* ---------------------------------------------------------------------------
+   Utskrift av kartan (kartförhandsvisningen -> webbläsarens Skriv ut).
+   Bara kartan ska med, inte rubrik, hint eller knappar.
+
+   Scopat till body.map-preview-open (sätts i showMapPreviewModal) så att
+   utskrift av vanliga sidor är opåverkad. @page-regeln injiceras från JS av
+   samma skäl - @page kan inte villkoras med en selektor.
+   --------------------------------------------------------------------------- */
+@media print {
+  body.map-preview-open { background: #fff; }
+
+  /* Allt utanför kartmodalen bort. */
+  body.map-preview-open > *:not(#map-preview-modal) { display: none !important; }
+
+  /* html/body har height:100% och modalen overflow:auto - båda ger
+     rullningslister i utskriften om de inte nollas. */
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  body.map-preview-open #map-preview-modal {
+    position: static !important;
+    display: block !important;
+    padding: 0 !important;
+    background: none !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+  body.map-preview-open .modal-backdrop { display: none !important; }
+
+  body.map-preview-open #map-preview-card {
+    position: static !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: none !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  /* Rubrik ("Karta: ..."), hint och knappraden (Fullskärm/Stäng). */
+  body.map-preview-open #map-preview-title,
+  body.map-preview-open #map-preview-hint,
+  body.map-preview-open #map-preview-card .row { display: none !important; }
+
+  /* Containern måste krympa runt bilden: prickar och etiketter är
+     positionerade i procent av CONTAINERN, inte av bilden. Låter vi
+     containern ligga kvar på width:100% medan bilden skalas ned av
+     max-height hamnar alla prickar fel i sidled. */
+  body.map-preview-open #map-preview-map.map {
+    display: inline-block !important;
+    width: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    background: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+  body.map-preview-open #map-preview-map.map img {
+    width: auto !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: 190mm !important;   /* liggande A4 minus marginaler */
+  }
+
+  /* Utan detta tvättar webbläsaren bort prickarnas och etiketternas
+     bakgrundsfärger vid utskrift. */
+  body.map-preview-open #map-preview-map,
+  body.map-preview-open #map-preview-map * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

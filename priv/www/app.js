@@ -545,6 +545,26 @@ function showMapPreviewModal(show) {
   }
   m.style.display = show ? "" : "none";
   m.setAttribute("aria-hidden", show ? "false" : "true");
+  // Utskriftsläge: se @media print i styles.css. Klassen scopar reglerna så
+  // att vanlig sidutskrift inte påverkas, och @page-regeln injiceras bara
+  // medan kartan visas (@page går inte att villkora med selektor).
+  document.body.classList.toggle("map-preview-open", !!show);
+  setPrintPageLandscape(!!show);
+}
+
+function setPrintPageLandscape(on) {
+  const id = "print-page-landscape";
+  let st = document.getElementById(id);
+  if (on) {
+    if (!st) {
+      st = document.createElement("style");
+      st.id = id;
+      st.textContent = "@page { size: A4 landscape; margin: 6mm; }";
+      document.head.appendChild(st);
+    }
+  } else if (st) {
+    st.remove();
+  }
 }
 
 async function showMapPreview(setId) {
@@ -627,23 +647,28 @@ function buildPdfWithJpegAndText({ jpegBytes, imgW, imgH, lines }) {
     offsets.push(cur);
   };
 
-  const pageW = 595; // A4 portrait points
-  const pageH = 842;
+  // Kartsidan ligger i liggande A4 - kartor är nästan alltid bredare än höga,
+  // och fit-skalningen nedan ger då en betydligt större karta. Namnlistan
+  // (sida 2) står kvar i stående, där får ~54 namn plats i stället för ~36.
+  const imgPageW = 842; // A4 landscape points
+  const imgPageH = 595;
+  const txtPageW = 595; // A4 portrait points
+  const txtPageH = 842;
   const margin = 36;
-  const maxW = pageW - margin * 2;
-  const maxH = pageH - margin * 2;
+  const maxW = imgPageW - margin * 2;
+  const maxH = imgPageH - margin * 2;
   const scale = Math.min(maxW / imgW, maxH / imgH);
   const drawW = imgW * scale;
   const drawH = imgH * scale;
-  const x0 = (pageW - drawW) / 2;
-  const y0 = (pageH - drawH) / 2;
+  const x0 = (imgPageW - drawW) / 2;
+  const y0 = (imgPageH - drawH) / 2;
 
   const imgContent = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x0.toFixed(2)} ${y0.toFixed(2)} cm\n/Im0 Do\nQ\n`;
   const imgContentBytes = new TextEncoder().encode(imgContent);
 
   const fontSize = 12;
   const lineHeight = 14;
-  let textY = pageH - margin - fontSize;
+  let textY = txtPageH - margin - fontSize;
   const textLines = [];
   textLines.push("BT");
   textLines.push(`/F1 ${fontSize} Tf`);
@@ -664,10 +689,10 @@ function buildPdfWithJpegAndText({ jpegBytes, imgW, imgH, lines }) {
   markOffset(); push("2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n");
   // 3: page1 (image)
   markOffset();
-  push(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
+  push(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${imgPageW} ${imgPageH}] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
   // 4: page2 (text)
   markOffset();
-  push(`4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 7 0 R >> >> /Contents 8 0 R >>\nendobj\n`);
+  push(`4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${txtPageW} ${txtPageH}] /Resources << /Font << /F1 7 0 R >> >> /Contents 8 0 R >>\nendobj\n`);
   // 5: image content stream
   markOffset();
   push(`5 0 obj\n<< /Length ${imgContentBytes.length} >>\nstream\n`);
