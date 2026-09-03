@@ -675,8 +675,18 @@ function openPrintMapWithLabels(meta, titleText) {
       z-index: 2;
     }
     @media print {
+      @page { size: A4 landscape; margin: 6mm; }
       .wrap { padding: 0; }
       h1 { display:none; }
+      /* Fyll den liggande sidan men spill inte över till en andra sida.
+         .map är redan inline-block och krymper runt bilden, så prickarnas
+         och etiketternas procentpositioner följer med när bilden skalas. */
+      img { width: auto; height: auto; max-width: 100%; max-height: 190mm; }
+      /* Annars tvättar webbläsaren bort prickarnas fyllning vid utskrift. */
+      .dot, .lbl {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
     }
   </style>
 </head>
