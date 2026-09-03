@@ -353,12 +353,15 @@ function renderQuizHome() {
     btnStart.addEventListener("click", () => startQuiz(s.id));
     const btnMap = el("button", { class: "secondary play-btn", text: "Karta" });
     btnMap.addEventListener("click", () => showMapPreview(s.id));
+    const btnPrint = el("button", { class: "secondary play-btn", text: "Skriv ut" });
+    btnPrint.disabled = !s.hasImage;
+    btnPrint.addEventListener("click", () => printMapForSet(s.id));
     const btnPdf = el("button", { class: "secondary play-btn", text: "PDF" });
     btnPdf.addEventListener("click", () => generatePdfForSet(s.id));
     const btnTop = el("button", { class: "secondary play-btn", text: "Topplista" });
     btnTop.addEventListener("click", () => showLeaderboardModal(s.id));
     const right = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnMap, btnStart]);
-    const right2 = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnTop, btnPdf, btnMap, btnStart]);
+    const right2 = el("div", { class: "row", style: "gap:8px; align-items:center;" }, [btnTop, btnPrint, btnPdf, btnMap, btnStart]);
     root.appendChild(el("div", { class: "set-row" }, [left, right2]));
   });
 }
@@ -592,6 +595,42 @@ async function showMapPreview(setId) {
   }));
 
   renderMap(mapEl, meta, { dots, labels });
+}
+
+// "Skriv ut" i setlistan: öppnar kartan och startar utskriften direkt, så man
+// slipper gå via Karta och sedan webbläsarens utskriftsmeny. Själva
+// utskriftslayouten (bara kartan, liggande A4) ligger i @media print i
+// styles.css och aktiveras av klassen som showMapPreviewModal sätter.
+async function printMapForSet(setId) {
+  await showMapPreview(setId);
+  const mapEl = document.querySelector("#map-preview-map");
+  const img = mapEl ? mapEl.querySelector("img") : null;
+  if (!img) {
+    showToast("Ingen bild att skriva ut.");
+    return;
+  }
+  await imageReady(img);
+  // Bilden styr containerns storlek, och prickarna sitter i procent av
+  // containern. Låt layouten sätta sig innan utskriftsdialogen fryser sidan.
+  // Medvetet setTimeout och inte requestAnimationFrame: rAF fyrar inte i en
+  // bakgrundsflik (och inte i headless), och då hade utskriften tyst uteblivit.
+  await new Promise((r) => setTimeout(r, 100));
+  try {
+    window.print();
+  } catch (e) {
+    showToast("Kunde inte öppna utskrift.");
+  }
+}
+
+function imageReady(img) {
+  return new Promise((resolve) => {
+    if (img.complete && img.naturalWidth) return resolve();
+    const done = () => resolve();
+    img.addEventListener("load", done, { once: true });
+    img.addEventListener("error", done, { once: true });
+    // Ge inte upp tyst om varken load eller error kommer.
+    setTimeout(done, 5000);
+  });
 }
 
 function sanitizeFilename(s) {
