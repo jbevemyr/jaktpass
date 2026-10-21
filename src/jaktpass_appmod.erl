@@ -160,7 +160,7 @@ handle_get_quiz(SetId, A) ->
     Mode0 = maps:get(<<"mode">>, Q, <<"rand10">>),
     case load_set_meta(SetId) of
         {ok, Meta} ->
-            Stands0 = maps:get(<<"stands">>, Meta, []),
+            Stands0 = meta_get_stands(Meta),
             seed_rand(),
             N0 = length(Stands0),
             Count =
@@ -386,7 +386,7 @@ handle_post_admin_set_stands(SetId, A) ->
                                 undefined -> Stand;
                                 _ -> Stand#{<<"note">> => to_bin(Note0)}
                             end,
-                        Stands0 = maps:get(<<"stands">>, Meta0, []),
+                        Stands0 = meta_get_stands(Meta0),
                         Meta = Meta0#{<<"stands">> => [Stand2 | Stands0]},
                         case save_set_meta(SetId, Meta) of
                             ok -> json_ok(201, Stand2);
@@ -1187,7 +1187,7 @@ handle_v2_get_quiz(ShareId0, A) ->
             SetId = binary_to_list(to_bin(SetIdB)),
             case v2_load_set_meta(AdminId, SetId) of
                 {ok, Meta} ->
-                    Stands0 = maps:get(<<"stands">>, Meta, []),
+                    Stands0 = meta_get_stands(Meta),
                     seed_rand(),
                     N0 = length(Stands0),
                     Count =
@@ -1673,7 +1673,7 @@ patch_entity_by_id(ListKey, EntityId, PatchFun) ->
             with_set_lock(SetId, fun() ->
                 case load_set_meta(SetId) of
                     {ok, Meta0} ->
-                        List0 = maps:get(ListKey, Meta0, []),
+                        List0 = normalize_stands_val(maps:get(ListKey, Meta0, [])),
                         case split_by_id(List0, EntityId) of
                             {ok, Entity0, Rest} ->
                                 case PatchFun(Entity0) of
@@ -1707,7 +1707,7 @@ delete_entity_by_id(ListKey, EntityId) ->
             with_set_lock(SetId, fun() ->
                 case load_set_meta(SetId) of
                     {ok, Meta0} ->
-                        List0 = maps:get(ListKey, Meta0, []),
+                        List0 = normalize_stands_val(maps:get(ListKey, Meta0, [])),
                         case split_by_id(List0, EntityId) of
                             {ok, _Entity, Rest} ->
                                 Meta = Meta0#{ListKey => Rest},
