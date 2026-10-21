@@ -16,6 +16,9 @@ stop() -> ok.
 %% Yaws records (#arg, #http_request, #headers, ...)
 %% OTP 22: använd lokal header (incheckad i repo) istället för include_lib(...)
 -include("yaws_api.hrl").
+-include_lib("kernel/include/file.hrl").
+
+-define(V2_SESSION_TTL, 30 * 86400).
 
 %% Multipart continuation state (Yaws parse_multipart_post/1)
 -record(mp_state, {count = 0, acc = []}).
@@ -2950,8 +2953,37 @@ v2_cookie_secure() ->
         _ -> false
     end.
 
+%% Sliding expiry on the session file's mtime, touched at most once a day.
+v2_session_alive(Path) ->
+    case file:read_file_info(Path, [{time, posix}]) of
+        {ok, #file_info{mtime = M}} ->
+            Age = erlang:system_time(second) - M,
+            if Age > ?V2_SESSION_TTL ->
+                    _ = file:delete(Path),
+                    false;
+               Age > 86400 ->
+                    _ = file:change_time(Path, erlang:localtime()),
+                    true;
+               true ->
+                    true
+            end;
+        _ ->
+            false
+    end.
+
+v2_sweep_sessions() ->
+    Dir = v2_sessions_dir(),
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            [v2_session_alive(filename:join(Dir, F)) || F <- Files],
+            ok;
+        _ ->
+            ok
+    end.
+
 v2_set_cookie_header(Token) when is_list(Token) ->
-    Base = "jaktpass_v2=" ++ Token ++ "; Path=/; HttpOnly; SameSite=Lax",
+    %% The server-side TTL decides; the cookie just has to outlive it.
+    Base = "jaktpass_v2=" ++ Token ++ "; Path=/; Max-Age=34560000; HttpOnly; SameSite=Lax",
     Val = case v2_cookie_secure() of true -> Base ++ "; Secure"; false -> Base end,
     {header, {"Set-Cookie", Val}}.
 
@@ -2960,6 +2992,7 @@ v2_set_cookie_header_expire() ->
     {header, {"Set-Cookie", "jaktpass_v2=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"}}.
 
 v2_new_session({admin, AdminId0}) ->
+    v2_sweep_sessions(),
     AdminId = to_bin(AdminId0),
     TokBin = crypto:strong_rand_bytes(24),
     Tok = base64url_encode(TokBin),
@@ -2970,6 +3003,7 @@ v2_new_session({admin, AdminId0}) ->
     {Tok, v2_set_cookie_header(Tok)};
 
 v2_new_session({user, UserId0}) ->
+    v2_sweep_sessions(),
     UserId = to_bin(UserId0),
     TokBin = crypto:strong_rand_bytes(24),
     Tok = base64url_encode(TokBin),
@@ -3006,7 +3040,7 @@ v2_current_principal(A) ->
         undefined -> error;
         Tok ->
             Path = v2_session_path(Tok),
-            case file:read_file(Path) of
+            case v2_session_alive(Path) andalso file:read_file(Path) of
                 {ok, Bin} ->
                     try
                         Sess = json_decode(Bin),
