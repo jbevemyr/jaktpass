@@ -33,12 +33,8 @@ out(A) ->
         dispatch(Method, Segs, A)
     catch
         Class:Reason:Stack ->
-            dbg_log("JAKTPASS_DEBUG_ERRORS", "jaktpass error: ~p:~p~n~p~n", [Class, Reason, Stack]),
-            json_error(500, <<"internal_error">>, #{
-                <<"class">> => to_bin(Class),
-                <<"reason">> => to_bin(io_lib:format("~p", [Reason])),
-                <<"stack">> => to_bin(io_lib:format("~p", [Stack]))
-            })
+            error_logger:error_msg("jaktpass error: ~p:~p~n~p~n", [Class, Reason, Stack]),
+            json_error(500, <<"internal_error">>, #{})
      end.
 
 %%====================================================================
@@ -1388,8 +1384,9 @@ v2_load_share(ShareId0) ->
                   L when is_list(L) -> L;
                   _ -> ""
               end,
-    Path = v2_share_path(ShareId),
-    case file:read_file(Path) of
+    case v2_valid_token(ShareId) andalso file:read_file(v2_share_path(ShareId)) of
+        false ->
+            {error, enoent};
         {ok, Bin} ->
             try {ok, json_decode(Bin)} catch _:_ -> {error, invalid_json} end;
         {error, enoent} ->
@@ -1523,12 +1520,19 @@ v2_sessions_dir() ->
     filename:join([v2_dir(), "sessions"]).
 
 v2_session_path(Token) ->
+    true = v2_valid_token(Token),
     filename:join([v2_sessions_dir(), Token ++ ".json"]).
+
+v2_valid_token(Tok) when is_list(Tok) ->
+    re:run(Tok, "^[A-Za-z0-9_-]{16,64}$", [{capture, none}]) =:= match;
+v2_valid_token(_) ->
+    false.
 
 v2_shares_dir() ->
     filename:join([v2_dir(), "shares"]).
 
 v2_share_path(ShareId) ->
+    true = v2_valid_token(ShareId),
     filename:join([v2_shares_dir(), ShareId ++ ".json"]).
 
 v2_index_path() ->
@@ -2979,8 +2983,15 @@ v2_new_session({user, UserId0}) ->
 v2_new_session(AdminId0) ->
     v2_new_session({admin, AdminId0}).
 
+v2_session_token(A) ->
+    Tok = v2_get_cookie(A#arg.headers, v2_cookie_name()),
+    case v2_valid_token(Tok) of
+        true -> Tok;
+        false -> undefined
+    end.
+
 v2_delete_session(A) ->
-    case v2_get_cookie(A#arg.headers, v2_cookie_name()) of
+    case v2_session_token(A) of
         undefined -> ok;
         Tok ->
             Path = v2_session_path(Tok),
@@ -2989,7 +3000,7 @@ v2_delete_session(A) ->
     end.
 
 v2_current_principal(A) ->
-    Tok0 = v2_get_cookie(A#arg.headers, v2_cookie_name()),
+    Tok0 = v2_session_token(A),
     v2_auth_dbg("me cookie_tok_present=~p cookie_repr=~p", [Tok0 =/= undefined, v2_cookie_repr(A#arg.headers)]),
     case Tok0 of
         undefined -> error;
