@@ -19,6 +19,7 @@ stop() -> ok.
 -include_lib("kernel/include/file.hrl").
 
 -define(V2_SESSION_TTL, 30 * 86400).
+-define(MAX_JSON_BODY, 256 * 1024).
 
 %% Multipart continuation state (Yaws parse_multipart_post/1)
 -record(mp_state, {count = 0, acc = []}).
@@ -1153,6 +1154,12 @@ handle_v2_add_set_editor(Admin, SetId, A) ->
     end).
 
 handle_v2_remove_set_editor(Admin, SetId, UserId0) ->
+    case is_valid_uuid(UserId0) of
+        true -> handle_v2_remove_set_editor_(Admin, SetId, UserId0);
+        false -> json_error(400, <<"invalid_user_id">>, #{})
+    end.
+
+handle_v2_remove_set_editor_(Admin, SetId, UserId0) ->
     AdminId = v2_admin_id(Admin),
     UserIdBin = to_bin(UserId0),
     with_v2_set_lock(AdminId, SetId, fun() ->
@@ -1293,7 +1300,7 @@ handle_v2_post_leaderboard(ShareId0, A) ->
                         Name0 = maps:get(<<"name">>, Body, undefined),
                         Score0 = maps:get(<<"score">>, Body, undefined),
                         Mode0 = maps:get(<<"mode">>, Body, <<"all">>),
-                        case {validate_nonempty_string(Name0), validate_score(Score0)} of
+                        case {validate_player_name(Name0), validate_score(Score0)} of
                             {{ok, Name}, {ok, Score}} ->
                                 Mode = normalize_quiz_mode(Mode0),
                                 Now = now_rfc3339(),
@@ -2362,6 +2369,8 @@ webp_scan(_) ->
 
 read_json_body(A) ->
     case recv_body_bin(A) of
+        {ok, Bin} when byte_size(Bin) > ?MAX_JSON_BODY ->
+            {error, <<"body_too_large">>};
         {ok, Bin} ->
             try
                 V = json_decode(Bin),
@@ -2543,7 +2552,11 @@ normalize_quiz_mode(<<"randHalf">>) -> <<"randHalf">>;
 normalize_quiz_mode(<<"all">>) -> <<"all">>;
 normalize_quiz_mode(<<"half">>) -> <<"randHalf">>;
 normalize_quiz_mode(<<"rand">>) -> <<"rand10">>;
-normalize_quiz_mode(B) when is_binary(B) -> normalize_quiz_mode(bin_trim(B));
+normalize_quiz_mode(B) when is_binary(B) ->
+    case bin_trim(B) of
+        B -> <<"all">>;
+        T -> normalize_quiz_mode(T)
+    end;
 normalize_quiz_mode(L) when is_list(L) -> normalize_quiz_mode(list_to_binary(L));
 normalize_quiz_mode(_) -> <<"all">>.
 
@@ -2955,13 +2968,16 @@ v2_cookie_secure() ->
 
 %% Sliding expiry on the session file's mtime, touched at most once a day.
 v2_session_alive(Path) ->
+    v2_session_alive(Path, true).
+
+v2_session_alive(Path, Touch) ->
     case file:read_file_info(Path, [{time, posix}]) of
         {ok, #file_info{mtime = M}} ->
             Age = erlang:system_time(second) - M,
             if Age > ?V2_SESSION_TTL ->
                     _ = file:delete(Path),
                     false;
-               Age > 86400 ->
+               Touch, Age > 86400 ->
                     _ = file:change_time(Path, erlang:localtime()),
                     true;
                true ->
@@ -2975,7 +2991,7 @@ v2_sweep_sessions() ->
     Dir = v2_sessions_dir(),
     case file:list_dir(Dir) of
         {ok, Files} ->
-            [v2_session_alive(filename:join(Dir, F)) || F <- Files],
+            [v2_session_alive(filename:join(Dir, F), false) || F <- Files],
             ok;
         _ ->
             ok
